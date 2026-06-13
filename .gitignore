@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PyInstaller build artifacts
+build/
+dist/
+.pyinstaller/
+assets/AppIcon.iconset/
+
+# App runtime data (local profiles, caches, downloaded JDKs)
+.app_data/
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
