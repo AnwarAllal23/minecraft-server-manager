@@ -2,6 +2,8 @@
 
 A cross-platform desktop application (Python + PySide6) for managing multiple local Minecraft Java servers from a single, responsive UI — Vanilla, Forge, NeoForge, Fabric and Quilt, including CurseForge/Modrinth modpack imports.
 
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 ## Features
 
 - Create, import, duplicate, rename and delete server profiles (Vanilla, Forge, NeoForge, Fabric, Quilt).
