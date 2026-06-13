@@ -62,9 +62,6 @@ All application data stays on the local machine:
 
 The application does not expose a web interface and does not transmit IP addresses, local paths or RCON credentials to any third party.
 
-## Versioning
-
-This project follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The current application version is exposed as `minecraft_manager.__version__` and shown in the window title. All notable changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
