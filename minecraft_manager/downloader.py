@@ -11,14 +11,20 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 FORGE_PROMOTIONS_URL = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
 FORGE_MAVEN_BASE = "https://maven.minecraftforge.net/net/minecraftforge/forge"
 
+USER_AGENT = "GestionServeursMinecraft/1.0"
+
 
 class DownloadError(RuntimeError):
     pass
 
 
+def _request(url: str) -> urllib.request.Request:
+    return urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+
+
 class VanillaDownloader:
     def fetch_manifest(self) -> Dict:
-        with urllib.request.urlopen(MANIFEST_URL, timeout=20) as response:
+        with urllib.request.urlopen(_request(MANIFEST_URL), timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def versions(self) -> List[str]:
@@ -31,20 +37,20 @@ class VanillaDownloader:
         if not match:
             raise DownloadError(f"Version Minecraft introuvable: {version}")
 
-        with urllib.request.urlopen(match["url"], timeout=20) as response:
+        with urllib.request.urlopen(_request(match["url"]), timeout=20) as response:
             version_meta = json.loads(response.read().decode("utf-8"))
         server_info = version_meta.get("downloads", {}).get("server")
         if not server_info or not server_info.get("url"):
             raise DownloadError(f"Aucun server.jar officiel disponible pour {version}")
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(server_info["url"], timeout=60) as response, destination.open("wb") as fh:
+        with urllib.request.urlopen(_request(server_info["url"]), timeout=60) as response, destination.open("wb") as fh:
             shutil.copyfileobj(response, fh)
 
 
 class ForgeDownloader:
     def fetch_promotions(self) -> Dict:
-        with urllib.request.urlopen(FORGE_PROMOTIONS_URL, timeout=20) as response:
+        with urllib.request.urlopen(_request(FORGE_PROMOTIONS_URL), timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def resolve_full_version(self, minecraft_version: str, forge_version: str = "") -> str:
@@ -68,5 +74,5 @@ class ForgeDownloader:
 
     def download_installer(self, full_version: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(self.installer_url(full_version), timeout=60) as response, destination.open("wb") as fh:
+        with urllib.request.urlopen(_request(self.installer_url(full_version)), timeout=60) as response, destination.open("wb") as fh:
             shutil.copyfileobj(response, fh)

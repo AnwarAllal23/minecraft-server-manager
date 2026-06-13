@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - MIT License.
 
+## [1.0.2] - 2026-06-13
+
+### Fixed
+- New Vanilla server profiles now use the Java version required by the selected Minecraft version (e.g. Java 21 for 1.20.5+) instead of always defaulting to Java 17, which caused an `UnsupportedClassVersionError` on startup.
+- Vanilla and Forge downloads now send a `User-Agent` header, fixing `HTTP Error 403: Forbidden` responses from Mojang/Forge CDNs during server creation.
+
 ## [1.0.1] - 2026-06-13
 
 ### Added

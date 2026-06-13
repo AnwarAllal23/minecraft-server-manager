@@ -552,10 +552,11 @@ class NewServerDialog(QDialog):
     def profile(self) -> ServerProfile:
         props = dict(DEFAULT_PROPERTIES)
         props["server-port"] = str(self.port.value())
+        version = self.version.currentText().strip()
         return ServerProfile(
             name=self.name.text().strip(),
             folder=self.folder.text().strip(),
-            version=self.version.currentText().strip(),
+            version=version,
             port=self.port.value(),
             ram_min_gb=self.ram_min.value(),
             ram_max_gb=self.ram_max.value(),
@@ -563,6 +564,7 @@ class NewServerDialog(QDialog):
             forge_version=self.forge_version.text().strip() if self.server_type.currentText() == "Forge" else "",
             modpack_path=self.modpack.text().strip() if self.server_type.currentText() == "Forge" else "",
             properties=props,
+            java_version=required_java_for_minecraft(version),
         )
 
 

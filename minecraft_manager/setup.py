@@ -100,6 +100,9 @@ def create_vanilla_server(profile: ServerProfile, download: bool = True) -> list
     write_properties(folder / "server.properties", profile.properties)
     if not profile.eula_path.exists():
         profile.eula_path.write_text("eula=false\n", encoding="utf-8")
+    required_java = required_java_for_minecraft(profile.version)
+    if required_java:
+        profile.java_version = required_java
     if download and not profile.jar_path.exists():
         VanillaDownloader().download_server(profile.version, profile.jar_path)
     return import_modpack(profile.modpack_path, folder)
