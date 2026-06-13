@@ -11,11 +11,10 @@ except Exception:  # pragma: no cover
     psutil = None
 
 
-def mac_memory_gb() -> float:
+def available_memory_gb() -> float:
     if psutil:
         return psutil.virtual_memory().available / (1024**3)
     return 0.0
-
 
 def folder_size(path: Path) -> int:
     total = 0

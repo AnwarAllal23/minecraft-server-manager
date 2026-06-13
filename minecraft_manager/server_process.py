@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import socket
+import os
+import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -58,7 +61,7 @@ class ServerRunner(QObject):
         java_bin_dir = str(Path(java).resolve().parent)
         env = QProcessEnvironment.systemEnvironment()
         existing_path = env.value("PATH")
-        env.insert("PATH", f"{java_bin_dir}:{existing_path}" if existing_path else java_bin_dir)
+        env.insert("PATH", f"{java_bin_dir}{os.pathsep}{existing_path}" if existing_path else java_bin_dir)
         env.insert("JAVA_HOME", str(Path(java_bin_dir).parent))
         # Force headless mode so the JVM never opens its own window, dock
         # icon or "Minecraft server" console on macOS - everything must stay
@@ -88,6 +91,15 @@ class ServerRunner(QObject):
     def _build_command(self, java: str) -> tuple[str, list[str]]:
         start_script = self._start_script_path()
         if start_script:
+            suffix = start_script.suffix.lower()
+            if sys.platform.startswith("win"):
+                if suffix in {".bat", ".cmd"}:
+                    return "cmd.exe", ["/c", start_script.name]
+                if suffix == ".ps1":
+                    return "powershell.exe", ["-ExecutionPolicy", "Bypass", "-File", start_script.name]
+                bash = shutil.which("bash")
+                if bash:
+                    return bash, [start_script.name]
             return "/bin/bash", [start_script.name]
         return java, self._build_args()
 
@@ -106,8 +118,13 @@ class ServerRunner(QObject):
         return base + ["-jar", self.profile.jar_file, "nogui"]
 
     def _start_script_path(self) -> Optional[Path]:
-        if self.profile.jar_file == "start-script" or find_start_script(self.profile.folder_path):
-            return find_start_script(self.profile.folder_path)
+        script = find_start_script(self.profile.folder_path)
+        if not script:
+            return None
+        if sys.platform.startswith("win") and script.suffix.lower() == ".sh" and not shutil.which("bash"):
+            return None
+        if self.profile.jar_file == "start-script" or script:
+            return script
         return None
 
     def _modloader_unix_args_path(self) -> Optional[str]:

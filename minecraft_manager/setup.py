@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -371,6 +373,14 @@ def looks_like_modded_server(folder: Path) -> bool:
         or find_start_script(folder)
         or (folder / "variables.txt").exists()
         or (folder / "startserver.sh").exists()
+        or (folder / "startserver.bat").exists()
+        or (folder / "startserver.cmd").exists()
+        or (folder / "start.bat").exists()
+        or (folder / "start.cmd").exists()
+        or (folder / "run.bat").exists()
+        or (folder / "run.cmd").exists()
+        or (folder / "start.ps1").exists()
+        or (folder / "run.ps1").exists()
         or (folder / "user_jvm_args.txt").exists()
         or (folder / "fabric-server-launch.jar").exists()
         or (folder / "fabric-server-launcher.jar").exists()
@@ -592,7 +602,19 @@ def configure_imported_server(folder: Path) -> tuple[ServerProfile, list[str]]:
 
 
 def find_start_script(folder: Path) -> Optional[Path]:
-    for name in ("start.sh", "startserver.sh", "run.sh"):
+    windows_names = (
+        "start.bat",
+        "start.cmd",
+        "startserver.bat",
+        "startserver.cmd",
+        "run.bat",
+        "run.cmd",
+        "start.ps1",
+        "run.ps1",
+    )
+    unix_names = ("start.sh", "startserver.sh", "run.sh")
+    names = windows_names + unix_names if sys.platform.startswith("win") else unix_names + windows_names
+    for name in names:
         script = folder / name
         if script.exists():
             return script
@@ -618,7 +640,8 @@ def configure_start_script_server(profile: ServerProfile) -> None:
     script = find_start_script(folder)
     if not script:
         return
-    script.chmod(script.stat().st_mode | 0o111)
+    if os.name != "nt":
+        script.chmod(script.stat().st_mode | 0o111)
     variables = read_serverpack_variables(folder)
     if variables.get("MINECRAFT_VERSION"):
         profile.version = variables["MINECRAFT_VERSION"]

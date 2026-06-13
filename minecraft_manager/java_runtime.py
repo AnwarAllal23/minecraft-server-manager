@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -21,12 +24,15 @@ def find_java(version: str = "17") -> str:
     managed = _find_managed_jdk(version)
     if managed:
         return str(managed)
-    exact = _find_exact_java_home(version)
+    exact = _find_platform_java_home(version)
     if exact:
-        return f"{exact}/bin/java"
+        return str(_java_binary(Path(exact) / "bin"))
     extracted = _find_extracted_jdk(version)
     if extracted:
         return str(extracted)
+    system = _find_system_java(version)
+    if system:
+        return str(system)
     if version:
         if not _major(version):
             raise JavaNotFoundError(f"Version Java invalide: {version}.")
@@ -53,24 +59,32 @@ def download_java(version: str, progress: Optional[Callable[[int, int], None]] =
     major = _major(version)
     if not major:
         raise JavaNotFoundError("Version Java invalide.")
+
+    os_name = _adoptium_os()
     arch = _adoptium_arch()
-    url = f"https://api.adoptium.net/v3/binary/latest/{major}/ga/mac/{arch}/jdk/hotspot/normal/eclipse"
+    archive_ext = "zip" if os_name == "windows" else "tar.gz"
+    url = f"https://api.adoptium.net/v3/binary/latest/{major}/ga/{os_name}/{arch}/jdk/hotspot/normal/eclipse"
     target_dir = managed_java_root() / major
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix=f"mcm-java-{major}-") as tmp:
         tmp_path = Path(tmp)
-        archive = tmp_path / f"temurin-{major}.tar.gz"
+        archive = tmp_path / f"temurin-{major}.{archive_ext}"
         _download_file(url, archive, progress)
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
-        with tarfile.open(archive, "r:gz") as tar:
-            _safe_extract(tar, extract_dir)
+        if archive_ext == "zip":
+            with zipfile.ZipFile(archive, "r") as zf:
+                _safe_extract_zip(zf, extract_dir)
+        else:
+            with tarfile.open(archive, "r:gz") as tar:
+                _safe_extract_tar(tar, extract_dir)
+
         java = _first_java_in(extract_dir)
         if not java:
-            raise JavaNotFoundError("Le JDK téléchargé ne contient pas de binaire Java utilisable.")
+            raise JavaNotFoundError("Le JDK telecharge ne contient pas de binaire Java utilisable.")
         if _java_major(java) != major:
-            raise JavaNotFoundError(f"Le JDK téléchargé n’est pas Java {major}.")
+            raise JavaNotFoundError(f"Le JDK telecharge n'est pas Java {major}.")
         jdk_root = _jdk_root_from_java(java)
         if target_dir.exists():
             shutil.rmtree(target_dir)
@@ -80,7 +94,7 @@ def download_java(version: str, progress: Optional[Callable[[int, int], None]] =
 
     java = _find_managed_jdk(major)
     if not java:
-        raise JavaNotFoundError(f"Java {major} a été téléchargé, mais l’application ne le retrouve pas.")
+        raise JavaNotFoundError(f"Java {major} a ete telecharge, mais l'application ne le retrouve pas.")
     return str(java)
 
 
@@ -99,10 +113,10 @@ def _download_file(url: str, destination: Path, progress: Optional[Callable[[int
                 if progress:
                     progress(downloaded, total)
     if not destination.exists() or destination.stat().st_size == 0:
-        raise JavaNotFoundError("Téléchargement Java incomplet.")
+        raise JavaNotFoundError("Telechargement Java incomplet.")
 
 
-def _safe_extract(tar: tarfile.TarFile, destination: Path) -> None:
+def _safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
     root = destination.resolve()
     for member in tar.getmembers():
         target = (destination / member.name).resolve()
@@ -113,6 +127,25 @@ def _safe_extract(tar: tarfile.TarFile, destination: Path) -> None:
     tar.extractall(destination)
 
 
+def _safe_extract_zip(zf: zipfile.ZipFile, destination: Path) -> None:
+    root = destination.resolve()
+    for member in zf.infolist():
+        target = (destination / member.filename).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise JavaNotFoundError("Archive Java invalide.") from exc
+    zf.extractall(destination)
+
+
+def _adoptium_os() -> str:
+    if sys.platform == "darwin":
+        return "mac"
+    if _is_windows():
+        return "windows"
+    return "linux"
+
+
 def _adoptium_arch() -> str:
     machine = platform.machine().lower()
     if machine in {"arm64", "aarch64"}:
@@ -120,7 +153,19 @@ def _adoptium_arch() -> str:
     return "x64"
 
 
-def _find_exact_java_home(version: str) -> str:
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _find_platform_java_home(version: str) -> str:
+    if sys.platform == "darwin":
+        return _find_macos_java_home(version)
+    if _is_windows():
+        return _find_windows_java_home(version)
+    return _find_unix_java_home(version)
+
+
+def _find_macos_java_home(version: str) -> str:
     major = _major(version)
     if not major:
         return ""
@@ -134,11 +179,59 @@ def _find_exact_java_home(version: str) -> str:
         return ""
     for line in output.splitlines():
         match = re.match(r"\s*(?P<version>\d+(?:\.\d+)*)\s+\([^)]*\).*?\s(?P<home>/.*)$", line)
-        if not match:
-            continue
-        if _major(match.group("version")) == major:
+        if match and _major(match.group("version")) == major:
             return match.group("home").strip()
     return ""
+
+
+def _find_windows_java_home(version: str) -> str:
+    major = _major(version)
+    if not major:
+        return ""
+    for env_name in (f"JAVA_HOME_{major}", "JAVA_HOME"):
+        value = os.environ.get(env_name, "")
+        home = _valid_java_home(Path(value), major) if value else None
+        if home:
+            return str(home)
+
+    roots: list[Path] = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        value = os.environ.get(env_name)
+        if not value:
+            continue
+        roots.append(Path(value) / "Eclipse Adoptium")
+        roots.append(Path(value) / "Java")
+        roots.append(Path(value) / "Programs" / "Eclipse Adoptium")
+
+    for root in roots:
+        if not root.exists():
+            continue
+        for home in sorted(root.glob(f"**/jdk-{major}*")):
+            valid = _valid_java_home(home, major)
+            if valid:
+                return str(valid)
+    return ""
+
+
+def _find_unix_java_home(version: str) -> str:
+    major = _major(version)
+    if not major:
+        return ""
+    for env_name in (f"JAVA_HOME_{major}", "JAVA_HOME"):
+        value = os.environ.get(env_name, "")
+        home = _valid_java_home(Path(value), major) if value else None
+        if home:
+            return str(home)
+    return ""
+
+
+def _valid_java_home(home: Path, major: str) -> Optional[Path]:
+    if not str(home):
+        return None
+    java = _java_binary(home / "bin")
+    if java.exists() and _java_major(java) == major:
+        return home
+    return None
 
 
 def _major(version: str) -> str:
@@ -163,16 +256,15 @@ def _find_extracted_jdk(version: str) -> str:
         Path.home() / "Desktop",
         Path.home() / "Applications",
         Path.home() / "Library" / "Java" / "JavaVirtualMachines",
+        Path.home() / "AppData" / "Local" / "Programs" / "Eclipse Adoptium",
     ]
     for root in roots:
         if not root.exists():
             continue
-        for java in root.glob(f"**/jdk-{major}*/Contents/Home/bin/java"):
-            if _java_major(java) == major:
-                return str(java)
-        for java in root.glob(f"**/*-{major}*/Contents/Home/bin/java"):
-            if _java_major(java) == major:
-                return str(java)
+        for pattern in _jdk_search_patterns(major):
+            for java in root.glob(pattern):
+                if _java_major(java) == major:
+                    return str(java)
     return ""
 
 
@@ -193,21 +285,52 @@ def _jdk_root_from_java(java: Path) -> Path:
     parts = java.parts
     if len(parts) >= 4 and parts[-4:] == ("Contents", "Home", "bin", "java"):
         return java.parents[3]
-    if len(parts) >= 2 and parts[-2:] == ("bin", "java"):
+    if len(parts) >= 2 and parts[-2] == "bin" and java.name in _java_binary_names():
         return java.parents[1]
-    raise JavaNotFoundError("Structure du JDK téléchargé non reconnue.")
+    raise JavaNotFoundError("Structure du JDK telecharge non reconnue.")
 
 
 def _first_matching_java(root: Path, major: str) -> Optional[Path]:
     if not root.exists():
         return None
-    for java in root.glob("**/Contents/Home/bin/java"):
-        if not major or _java_major(java) == major:
-            return java
-    for java in root.glob("**/bin/java"):
-        if not major or _java_major(java) == major:
-            return java
+    for pattern in _jdk_search_patterns(major or "*"):
+        for java in root.glob(pattern):
+            if not major or _java_major(java) == major:
+                return java
     return None
+
+
+def _jdk_search_patterns(major: str) -> list[str]:
+    patterns = []
+    version_globs = [f"jdk-{major}*", f"*-{major}*"] if major != "*" else ["jdk-*", "*"]
+    for name in _java_binary_names():
+        for version_glob in version_globs:
+            patterns.append(f"**/{version_glob}/Contents/Home/bin/{name}")
+            patterns.append(f"**/{version_glob}/bin/{name}")
+        patterns.append(f"**/bin/{name}")
+    return patterns
+
+
+def _java_binary_names() -> tuple[str, ...]:
+    return ("java.exe", "java") if _is_windows() else ("java",)
+
+
+def _java_binary(bin_dir: Path) -> Path:
+    for name in _java_binary_names():
+        candidate = bin_dir / name
+        if candidate.exists():
+            return candidate
+    return bin_dir / ("java.exe" if _is_windows() else "java")
+
+
+def _find_system_java(version: str) -> str:
+    major = _major(version)
+    java = shutil.which("java")
+    if not java:
+        return ""
+    if not major or _java_major(Path(java)) == major:
+        return java
+    return ""
 
 
 def _java_major(java: Path) -> str:

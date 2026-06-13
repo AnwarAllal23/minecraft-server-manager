@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -83,7 +85,12 @@ class ServerProfile:
 
 
 def app_data_dir() -> Path:
-    base = Path.home() / "Library" / "Application Support" / "GestionServeursMinecraft"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "GestionServeursMinecraft"
+    elif os.name == "nt":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "GestionServeursMinecraft"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "GestionServeursMinecraft"
     try:
         base.mkdir(parents=True, exist_ok=True)
         probe = base / ".write-test"

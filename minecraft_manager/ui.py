@@ -6,6 +6,8 @@ import subprocess
 import time
 import urllib.request
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -53,7 +55,7 @@ from .downloader import VanillaDownloader
 from .java_runtime import JavaNotFoundError, download_java, find_java, managed_java_root
 from .models import DEFAULT_PROPERTIES, ServerProfile, app_data_dir
 from . import __version__
-from .monitoring import ProcessMonitor, folder_size, mac_memory_gb
+from .monitoring import ProcessMonitor, folder_size, available_memory_gb
 from .mods import disable_duplicate_mods, find_duplicate_mods, format_duplicate_mods
 from .networking import PortMappingResult, local_lan_ip, open_minecraft_port
 from .players import PlayerTracker
@@ -149,6 +151,23 @@ BOOL_PROPERTY_LABELS = {
 }
 
 ADVANCED_PROPERTY_KEYS = [key for key in DEFAULT_PROPERTIES if key not in BOOL_PROPERTY_LABELS]
+
+
+def machine_label() -> str:
+    if sys.platform == "darwin":
+        return "ce Mac"
+    if os.name == "nt":
+        return "ce PC"
+    return "cette machine"
+
+
+def open_folder(path: Path) -> None:
+    if sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    elif os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)
 
 
 class ToggleSwitch(QCheckBox):
@@ -355,7 +374,7 @@ class AvatarWorker(QThread):
 def slugify_server_name(name: str) -> str:
     """Turn a server name into a filesystem-friendly folder name.
 
-    Strips characters that are invalid in macOS paths (``/``, ``:``...) and
+    Strips characters that are invalid in common desktop paths (``/``, ``:``...) and
     collapses repeated whitespace, while keeping the result readable.
     """
     cleaned = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
@@ -427,7 +446,7 @@ class NewServerDialog(QDialog):
         self.ram_max = QSpinBox()
         self.ram_max.setRange(1, 128)
         self.ram_max.setValue(4)
-        self.info = QLabel(f"RAM disponible sur ce Mac: {mac_memory_gb():.1f} Go")
+        self.info = QLabel(f"RAM disponible sur {machine_label()}: {available_memory_gb():.1f} Go")
 
         form.addRow("Nom", self.name)
         form.addRow("Dossier", folder_row)
@@ -609,7 +628,7 @@ class MainWindow(QMainWindow):
         self.menuBar().addMenu("Application").addAction(action)
 
     def _build_tray_icon(self) -> None:
-        """Create the macOS notification-center icon used by notify().
+        """Create the desktop notification icon used by notify().
 
         Reuses a standard Qt icon so the app doesn't need to ship/bundle a
         dedicated asset just for notifications.
@@ -870,7 +889,7 @@ class MainWindow(QMainWindow):
         self.ram_min_setting.setRange(1, 128)
         self.ram_max_setting = QSpinBox()
         self.ram_max_setting.setRange(1, 128)
-        self.ram_available_label = QLabel(f"RAM disponible sur ce Mac: {mac_memory_gb():.1f} Go")
+        self.ram_available_label = QLabel(f"RAM disponible sur {machine_label()}: {available_memory_gb():.1f} Go")
         save_ram = QPushButton("Enregistrer la RAM")
         save_ram.clicked.connect(self.save_ram_settings)
         ram_layout.addRow("RAM minimale (-Xms)", self.ram_min_setting)
@@ -956,7 +975,7 @@ class MainWindow(QMainWindow):
         local.setChecked(True)
         local.setEnabled(False)
         self.theme_mode = QComboBox()
-        self.theme_mode.addItem("Automatique macOS", "auto")
+        self.theme_mode.addItem("Automatique système", "auto")
         self.theme_mode.addItem("Clair", "light")
         self.theme_mode.addItem("Sombre", "dark")
         current_theme = self.settings.get_str("theme_mode")
@@ -969,7 +988,7 @@ class MainWindow(QMainWindow):
         self.download_heads_checkbox.stateChanged.connect(self.save_app_settings)
         self.notifications_checkbox = QCheckBox("Notifications (connexions/déconnexions, RAM, disque, erreurs)")
         self.notifications_checkbox.setChecked(self.settings.get_bool("notifications_enabled"))
-        self.notifications_checkbox.setToolTip("Affiche une notification macOS quand un joueur rejoint/quitte ou en cas de problème (RAM, disque, démarrage).")
+        self.notifications_checkbox.setToolTip("Affiche une notification système quand un joueur rejoint/quitte ou en cas de problème (RAM, disque, démarrage).")
         self.notifications_checkbox.stateChanged.connect(self.save_app_settings)
         layout.addRow("Données application", self.data_dir_label)
         layout.addRow("Thème", self.theme_mode)
@@ -1027,7 +1046,7 @@ class MainWindow(QMainWindow):
         self.current_version_label.setText(profile.version)
         self.ram_min_setting.setValue(profile.ram_min_gb)
         self.ram_max_setting.setValue(profile.ram_max_gb)
-        self.ram_available_label.setText(f"RAM disponible sur ce Mac: {mac_memory_gb():.1f} Go")
+        self.ram_available_label.setText(f"RAM disponible sur {machine_label()}: {available_memory_gb():.1f} Go")
         if (profile.folder_path / "server.properties").exists():
             profile.properties = read_properties(profile.folder_path / "server.properties")
         if profile.id not in self.trackers:
@@ -1105,7 +1124,7 @@ class MainWindow(QMainWindow):
             f"Java {java_version} requis",
             "Analyse du modpack:\n"
             f"{summary}\n\n"
-            f"Java {java_version} est introuvable sur ce Mac.\n\n"
+            f"Java {java_version} est introuvable sur {machine_label()}.\n\n"
             "Autorises-tu l’application à télécharger Temurin Java "
             f"{java_version} et à l’installer dans son dossier local ?\n\n"
             f"{managed_java_root()}",
@@ -1176,13 +1195,13 @@ class MainWindow(QMainWindow):
         if notes:
             message += f"\n\n{notes}"
         # Another frequent CurseForge-import crash: the modpack's
-        # user_jvm_args.txt asks for more RAM (-Xmx) than this Mac actually
+        # user_jvm_args.txt asks for more RAM (-Xmx) than this machine actually
         # has available, so the JVM fails to allocate its heap at startup.
-        available_gb = mac_memory_gb()
+        available_gb = available_memory_gb()
         if available_gb and profile.ram_max_gb > available_gb * 0.9:
             message += (
                 f"\n\nATTENTION: ce modpack demande {profile.ram_max_gb} Go de RAM, "
-                f"mais ce Mac n'a que {available_gb:.1f} Go disponibles. "
+                f"mais {machine_label()} n'a que {available_gb:.1f} Go disponibles. "
                 "Réduis l'allocation RAM dans « Paramètres serveur » avant de démarrer, "
                 "sinon le serveur risque de crasher immédiatement."
             )
@@ -1276,7 +1295,7 @@ class MainWindow(QMainWindow):
         if self.runner(profile).running:
             QMessageBox.warning(self, "Serveur actif", "Arrête le serveur avant de supprimer son profil.")
             return
-        if QMessageBox.question(self, "Supprimer", "Supprimer ce profil ? Le dossier serveur reste sur le Mac.") == QMessageBox.Yes:
+        if QMessageBox.question(self, "Supprimer", f"Supprimer ce profil ? Le dossier serveur reste sur {machine_label()}.") == QMessageBox.Yes:
             self.store.remove(profile.id)
             self.current_profile = None
             self.refresh_server_list()
@@ -1435,7 +1454,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Port occupé", "Un autre serveur lancé utilise déjà ce port.")
                 return
         if not port_is_free(profile.port) and not self.runner(profile).running:
-            QMessageBox.warning(self, "Port occupé", f"Le port {profile.port} est déjà utilisé sur ce Mac.")
+            QMessageBox.warning(self, "Port occupé", f"Le port {profile.port} est déjà utilisé sur {machine_label()}.")
             return
         if not self._ensure_eula(profile):
             return
@@ -1520,7 +1539,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             f"Java {java_version} requis",
-            f"Le serveur « {profile.name} » a besoin de Java {java_version}, introuvable sur ce Mac.\n\n"
+            f"Le serveur « {profile.name} » a besoin de Java {java_version}, introuvable sur {machine_label()}.\n\n"
             f"Veux-tu que l’application télécharge Temurin Java {java_version} et l’installe "
             "automatiquement dans son propre dossier ? Le serveur démarrera ensuite "
             "automatiquement avec ce Java.\n\n"
@@ -1959,7 +1978,7 @@ class MainWindow(QMainWindow):
 
     def open_backups_folder(self) -> None:
         if self.current_profile:
-            subprocess.run(["open", str(backups_dir(self.current_profile))], check=False)
+            open_folder(backups_dir(self.current_profile))
 
     def _request_folder_size(self, profile: ServerProfile) -> None:
         """Kick off a background folder-size scan if none is running.
@@ -2044,7 +2063,7 @@ class MainWindow(QMainWindow):
                 self._disk_warned.add(profile.id)
                 self.notify(
                     profile.name,
-                    f"Espace disque faible: {snapshot['disk_free_gb']:.1f} Go restants sur ce Mac. "
+                    f"Espace disque faible: {snapshot['disk_free_gb']:.1f} Go restants sur {machine_label()}. "
                     "Le serveur peut s’arrêter ou corrompre des fichiers s’il n’y a plus de place.",
                     QSystemTrayIcon.Warning,
                 )

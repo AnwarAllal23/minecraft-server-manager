@@ -77,6 +77,14 @@ def _single_root_prefix(zf: zipfile.ZipFile) -> str:
         "kubejs",
         "server.properties",
         "startserver.sh",
+        "startserver.bat",
+        "startserver.cmd",
+        "start.bat",
+        "start.cmd",
+        "run.bat",
+        "run.cmd",
+        "start.ps1",
+        "run.ps1",
         "user_jvm_args.txt",
     }
     names = {_strip_prefix(name, root_prefix).split("/", 1)[0] for name in zf.namelist() if name.startswith(root_prefix)}
