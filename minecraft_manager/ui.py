@@ -57,7 +57,14 @@ from .models import DEFAULT_PROPERTIES, ServerProfile, app_data_dir
 from . import __version__
 from .monitoring import ProcessMonitor, folder_size, available_memory_gb
 from .mods import disable_duplicate_mods, find_duplicate_mods, format_duplicate_mods
-from .networking import PortMappingResult, local_lan_ip, open_minecraft_port
+from .networking import (
+    PortMapping,
+    PortMappingResult,
+    delete_port_mapping,
+    list_port_mappings,
+    local_lan_ip,
+    open_minecraft_port,
+)
 from .players import PlayerTracker
 from .profiles import ProfileStore
 from .properties import read_properties, write_properties
@@ -276,6 +283,35 @@ class PortMappingWorker(QThread):
                 connect_address="",
             )
         self.finished_ok.emit(self.profile_id, result)
+
+
+class PortListWorker(QThread):
+    finished_ok = Signal(list, str)
+
+    def run(self) -> None:
+        try:
+            mappings, error = list_port_mappings()
+        except Exception as exc:
+            mappings, error = [], str(exc)
+        self.finished_ok.emit(mappings, error)
+
+
+class PortDeleteWorker(QThread):
+    finished_ok = Signal(list)
+
+    def __init__(self, mappings: List[PortMapping]) -> None:
+        super().__init__()
+        self.mappings = mappings
+
+    def run(self) -> None:
+        results = []
+        for mapping in self.mappings:
+            try:
+                ok, error = delete_port_mapping(mapping.external_port, mapping.protocol)
+            except Exception as exc:
+                ok, error = False, str(exc)
+            results.append((mapping, ok, error))
+        self.finished_ok.emit(results)
 
 
 class VersionWorker(QThread):
@@ -607,6 +643,7 @@ class MainWindow(QMainWindow):
         self._folder_size_last_started: Dict[str, float] = {}
         self.duplicate_mods_workers: Dict[str, DuplicateModsWorker] = {}
         self._pending_import_messages: Dict[str, str] = {}
+        self._ports_cache: List[PortMapping] = []
         # Modded servers can spam hundreds of log lines per second while
         # loading. Re-rendering the console/players tables on every single
         # line would freeze the UI, so refreshes are coalesced into one
@@ -694,6 +731,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._properties_tab(), "Paramètres serveur")
         self.tabs.addTab(self._versions_tab(), "Versions Minecraft")
         self.tabs.addTab(self._backups_tab(), "Backups")
+        self.tabs.addTab(self._ports_tab(), "Ports ouverts")
         self.tabs.addTab(self._storage_tab(), "Stockage")
         self.tabs.addTab(self._app_settings_tab(), "Paramètres application")
         root.addWidget(self.tabs)
@@ -959,6 +997,29 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
         self.backups_list = QListWidget()
         layout.addWidget(self.backups_list)
+        return page
+
+    def _ports_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        row = QHBoxLayout()
+        refresh = QPushButton("Actualiser")
+        delete_all = QPushButton("Supprimer tous les ports ouverts")
+        refresh.clicked.connect(self.refresh_open_ports)
+        delete_all.clicked.connect(self.delete_all_open_ports)
+        row.addWidget(refresh)
+        row.addWidget(delete_all)
+        row.addStretch()
+        layout.addLayout(row)
+        self.ports_table = QTableWidget(0, 5)
+        self.ports_table.setHorizontalHeaderLabels(
+            ["Port externe", "Protocole", "Redirigé vers", "Description", ""]
+        )
+        self.ports_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ports_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.ports_table)
+        self.ports_status_label = QLabel("")
+        layout.addWidget(self.ports_status_label)
         return page
 
     def _storage_tab(self) -> QWidget:
@@ -1981,6 +2042,75 @@ class MainWindow(QMainWindow):
     def open_backups_folder(self) -> None:
         if self.current_profile:
             open_folder(backups_dir(self.current_profile))
+
+    def refresh_open_ports(self) -> None:
+        if getattr(self, "ports_worker", None) and self.ports_worker.isRunning():
+            return
+        self.ports_status_label.setText("Recherche du routeur UPnP...")
+        self.ports_table.setRowCount(0)
+        self.ports_worker = PortListWorker()
+        self.ports_worker.finished_ok.connect(self._on_ports_listed)
+        self.ports_worker.start()
+
+    def _on_ports_listed(self, mappings: List[PortMapping], error: str) -> None:
+        self._ports_cache = mappings
+        self._fill_ports_table(mappings)
+        if error:
+            self.ports_status_label.setText(error)
+        elif not mappings:
+            self.ports_status_label.setText("Aucun port ouvert sur ce routeur.")
+        else:
+            self.ports_status_label.setText(f"{len(mappings)} port(s) ouvert(s) sur ce routeur.")
+
+    def _fill_ports_table(self, mappings: List[PortMapping]) -> None:
+        self.ports_table.setRowCount(len(mappings))
+        for row, mapping in enumerate(mappings):
+            self.ports_table.setItem(row, 0, QTableWidgetItem(str(mapping.external_port)))
+            self.ports_table.setItem(row, 1, QTableWidgetItem(mapping.protocol))
+            self.ports_table.setItem(
+                row, 2, QTableWidgetItem(f"{mapping.internal_client}:{mapping.internal_port}")
+            )
+            self.ports_table.setItem(row, 3, QTableWidgetItem(mapping.description))
+            delete_button = QPushButton("Supprimer")
+            delete_button.clicked.connect(lambda _checked=False, r=row: self.delete_open_port(r))
+            self.ports_table.setCellWidget(row, 4, delete_button)
+
+    def delete_open_port(self, row: int) -> None:
+        if row >= len(self._ports_cache):
+            return
+        mapping = self._ports_cache[row]
+        if getattr(self, "ports_delete_worker", None) and self.ports_delete_worker.isRunning():
+            return
+        self.ports_status_label.setText(f"Suppression du port {mapping.external_port}...")
+        self.ports_delete_worker = PortDeleteWorker([mapping])
+        self.ports_delete_worker.finished_ok.connect(self._on_ports_deleted)
+        self.ports_delete_worker.start()
+
+    def delete_all_open_ports(self) -> None:
+        if not self._ports_cache:
+            return
+        if getattr(self, "ports_delete_worker", None) and self.ports_delete_worker.isRunning():
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Supprimer tous les ports",
+                f"Supprimer les {len(self._ports_cache)} redirection(s) de port ouvertes sur ce routeur ?",
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        self.ports_status_label.setText("Suppression des ports ouverts...")
+        self.ports_delete_worker = PortDeleteWorker(list(self._ports_cache))
+        self.ports_delete_worker.finished_ok.connect(self._on_ports_deleted)
+        self.ports_delete_worker.start()
+
+    def _on_ports_deleted(self, results: list) -> None:
+        failures = [(mapping, error) for mapping, ok, error in results if not ok]
+        if failures:
+            details = "\n".join(f"Port {mapping.external_port}: {error}" for mapping, error in failures)
+            QMessageBox.warning(self, "Suppression incomplète", f"Certains ports n'ont pas pu être supprimés:\n{details}")
+        self.refresh_open_ports()
 
     def _request_folder_size(self, profile: ServerProfile) -> None:
         """Kick off a background folder-size scan if none is running.

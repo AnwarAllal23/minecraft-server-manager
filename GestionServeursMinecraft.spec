@@ -51,8 +51,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Gestion Serveurs Minecraft",
         "CFBundleDisplayName": "Gestion Serveurs Minecraft",
-        "CFBundleShortVersionString": "1.0.2",
-        "CFBundleVersion": "1.0.2",
+        "CFBundleShortVersionString": "1.0.3",
+        "CFBundleVersion": "1.0.3",
         "NSHighResolutionCapable": "True",
         "NSRequiresAquaSystemAppearance": "False",
     },

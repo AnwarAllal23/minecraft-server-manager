@@ -153,6 +153,79 @@ def open_minecraft_port(port: int, description: str = "Minecraft Server") -> Por
     )
 
 
+@dataclass
+class PortMapping:
+    external_port: int
+    protocol: str
+    internal_client: str
+    internal_port: int
+    description: str
+    enabled: bool
+
+
+def list_port_mappings() -> tuple[list[PortMapping], str]:
+    """List all UPnP port mappings on the router.
+
+    Returns ``(mappings, error)``. ``error`` is empty on success.
+    """
+    upnp = _discover_upnp_gateway()
+    if not upnp:
+        return [], "Aucun routeur UPnP detecte."
+
+    control_url, service_type, _router = upnp
+    mappings: list[PortMapping] = []
+    index = 0
+    while True:
+        try:
+            result = _soap(
+                control_url,
+                service_type,
+                "GetGenericPortMappingEntry",
+                {"NewPortMappingIndex": str(index)},
+            )
+        except RuntimeError:
+            break
+        external_port = _xml_value(result, "NewExternalPort")
+        if not external_port:
+            break
+        mappings.append(
+            PortMapping(
+                external_port=int(external_port),
+                protocol=_xml_value(result, "NewProtocol"),
+                internal_client=_xml_value(result, "NewInternalClient"),
+                internal_port=int(_xml_value(result, "NewInternalPort") or "0"),
+                description=_xml_value(result, "NewPortMappingDescription"),
+                enabled=_xml_value(result, "NewEnabled") in ("1", "true", "True"),
+            )
+        )
+        index += 1
+        if index > 200:
+            break
+    return mappings, ""
+
+
+def delete_port_mapping(external_port: int, protocol: str = "TCP") -> tuple[bool, str]:
+    upnp = _discover_upnp_gateway()
+    if not upnp:
+        return False, "Aucun routeur UPnP detecte."
+
+    control_url, service_type, _router = upnp
+    try:
+        _soap(
+            control_url,
+            service_type,
+            "DeletePortMapping",
+            {
+                "NewRemoteHost": "",
+                "NewExternalPort": str(external_port),
+                "NewProtocol": protocol,
+            },
+        )
+        return True, ""
+    except RuntimeError as exc:
+        return False, str(exc)
+
+
 def _discover_upnp_gateway(timeout: float = 3.0) -> tuple[str, str, str] | None:
     targets = (
         "urn:schemas-upnp-org:device:InternetGatewayDevice:1",

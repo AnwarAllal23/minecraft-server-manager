@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - MIT License.
 
+## [1.0.3] - 2026-06-13
+
+### Added
+- New "Ports ouverts" tab listing all UPnP port mappings on the router, with a button to delete a single port and a button to delete all open ports at once.
+
 ## [1.0.2] - 2026-06-13
 
 ### Fixed
