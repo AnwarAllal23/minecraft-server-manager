@@ -288,9 +288,13 @@ class PortMappingWorker(QThread):
 class PortListWorker(QThread):
     finished_ok = Signal(list, str)
 
+    def __init__(self, candidate_ports: List[int]) -> None:
+        super().__init__()
+        self.candidate_ports = candidate_ports
+
     def run(self) -> None:
         try:
-            mappings, error = list_port_mappings()
+            mappings, error = list_port_mappings(self.candidate_ports)
         except Exception as exc:
             mappings, error = [], str(exc)
         self.finished_ok.emit(mappings, error)
@@ -2048,7 +2052,8 @@ class MainWindow(QMainWindow):
             return
         self.ports_status_label.setText("Recherche du routeur UPnP...")
         self.ports_table.setRowCount(0)
-        self.ports_worker = PortListWorker()
+        candidate_ports = sorted({profile.port for profile in self.store.profiles})
+        self.ports_worker = PortListWorker(candidate_ports)
         self.ports_worker.finished_ok.connect(self._on_ports_listed)
         self.ports_worker.start()
 

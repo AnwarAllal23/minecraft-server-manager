@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - New "Ports ouverts" tab listing all UPnP port mappings on the router, with a button to delete a single port and a button to delete all open ports at once.
 
+### Fixed
+- The "Ports ouverts" tab now also checks each server profile's port individually, since some routers (e.g. Freebox) report an empty list via the generic UPnP enumeration even when port mappings exist.
+
 ## [1.0.2] - 2026-06-13
 
 ### Fixed

@@ -163,8 +163,14 @@ class PortMapping:
     enabled: bool
 
 
-def list_port_mappings() -> tuple[list[PortMapping], str]:
-    """List all UPnP port mappings on the router.
+def list_port_mappings(candidate_ports: "list[int] | None" = None) -> tuple[list[PortMapping], str]:
+    """List UPnP port mappings on the router.
+
+    Some routers (e.g. Freebox) do not implement ``GetGenericPortMappingEntry``
+    and report an empty list even when mappings exist, while
+    ``GetSpecificPortMappingEntry`` for the same port works fine. So this
+    first tries the generic enumeration, then checks each port in
+    ``candidate_ports`` individually to catch mappings the enumeration missed.
 
     Returns ``(mappings, error)``. ``error`` is empty on success.
     """
@@ -174,6 +180,7 @@ def list_port_mappings() -> tuple[list[PortMapping], str]:
 
     control_url, service_type, _router = upnp
     mappings: list[PortMapping] = []
+    seen_ports: set[int] = set()
     index = 0
     while True:
         try:
@@ -198,9 +205,35 @@ def list_port_mappings() -> tuple[list[PortMapping], str]:
                 enabled=_xml_value(result, "NewEnabled") in ("1", "true", "True"),
             )
         )
+        seen_ports.add(int(external_port))
         index += 1
         if index > 200:
             break
+
+    for port in candidate_ports or []:
+        if port in seen_ports:
+            continue
+        for protocol in ("TCP", "UDP"):
+            try:
+                result = _soap(
+                    control_url,
+                    service_type,
+                    "GetSpecificPortMappingEntry",
+                    {"NewRemoteHost": "", "NewExternalPort": str(port), "NewProtocol": protocol},
+                )
+            except RuntimeError:
+                continue
+            mappings.append(
+                PortMapping(
+                    external_port=port,
+                    protocol=protocol,
+                    internal_client=_xml_value(result, "NewInternalClient"),
+                    internal_port=int(_xml_value(result, "NewInternalPort") or "0"),
+                    description=_xml_value(result, "NewPortMappingDescription"),
+                    enabled=_xml_value(result, "NewEnabled") in ("1", "true", "True"),
+                )
+            )
+            seen_ports.add(port)
     return mappings, ""
 
 
