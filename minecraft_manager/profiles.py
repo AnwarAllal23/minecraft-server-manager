@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,14 +18,27 @@ class ProfileStore:
         if not self.path.exists():
             self.profiles = []
             return
-        with self.path.open("r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-        self.profiles = [ServerProfile.from_dict(item) for item in raw]
+        try:
+            with self.path.open("r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            self.profiles = [ServerProfile.from_dict(item) for item in raw]
+        except (OSError, ValueError, TypeError):
+            # Corrupted/truncated/unreadable profiles.json (crash mid-save,
+            # disk full, manual edit gone wrong...) must not prevent the app
+            # from starting. Quarantine the bad file instead of overwriting
+            # it on the next save, so the data isn't silently lost forever.
+            self.profiles = []
+            try:
+                self.path.replace(self.path.with_suffix(".json.corrupted"))
+            except OSError:
+                pass
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as fh:
+        tmp_path = self.path.with_suffix(".json.tmp")
+        with tmp_path.open("w", encoding="utf-8") as fh:
             json.dump([p.to_dict() for p in self.profiles], fh, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, self.path)
 
     def add(self, profile: ServerProfile) -> None:
         self.profiles.append(profile)

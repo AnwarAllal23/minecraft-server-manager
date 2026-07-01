@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -79,7 +79,11 @@ class ServerProfile:
     def from_dict(cls, data: Dict[str, Any]) -> "ServerProfile":
         merged = dict(DEFAULT_PROPERTIES)
         merged.update(data.get("properties") or {})
-        data = dict(data)
+        known_fields = {f.name for f in fields(cls)}
+        # Drop unknown keys (e.g. saved by a newer app version, or a
+        # hand-edited profiles.json) instead of letting them blow up
+        # cls(**data) with a TypeError.
+        data = {key: value for key, value in data.items() if key in known_fields}
         data["properties"] = merged
         return cls(**data)
 

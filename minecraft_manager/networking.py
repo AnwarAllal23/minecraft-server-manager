@@ -8,6 +8,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from .i18n import tr
+
 
 MINECRAFT_PROTOCOL = "TCP"
 
@@ -66,10 +68,10 @@ def open_minecraft_port(port: int, description: str = "Minecraft Server") -> Por
         address = connection_address(port, external_ip)
         return PortMappingResult(
             ok=False,
-            message=(
+            message=tr(
                 "Aucun routeur UPnP detecte. Active UPnP sur le routeur, ou cree une redirection "
-                f"manuelle TCP {port} vers {local_ip}:{port}."
-            ),
+                "manuelle TCP {port} vers {ip}:{port}."
+            ).format(port=port, ip=local_ip),
             public_ip=external_ip,
             local_ip=local_ip,
             connect_address=address,
@@ -93,7 +95,7 @@ def open_minecraft_port(port: int, description: str = "Minecraft Server") -> Por
             address = connection_address(port, external_ip)
             return PortMappingResult(
                 ok=True,
-                message="Le port etait deja ouvert automatiquement sur ce routeur.",
+                message=tr("Le port etait deja ouvert automatiquement sur ce routeur."),
                 public_ip=external_ip,
                 local_ip=local_ip,
                 connect_address=address,
@@ -103,7 +105,7 @@ def open_minecraft_port(port: int, description: str = "Minecraft Server") -> Por
             address = connection_address(port, external_ip)
             return PortMappingResult(
                 ok=False,
-                message=f"Le port {port} est deja redirige vers {existing_client}:{existing_port}.",
+                message=tr("Le port {port} est deja redirige vers {client}:{internal_port}.").format(port=port, client=existing_client, internal_port=existing_port),
                 public_ip=external_ip,
                 local_ip=local_ip,
                 connect_address=address,
@@ -132,10 +134,10 @@ def open_minecraft_port(port: int, description: str = "Minecraft Server") -> Por
         address = connection_address(port, external_ip)
         return PortMappingResult(
             ok=False,
-            message=(
-                f"Le routeur a refuse l'ouverture UPnP du port {port}: {exc}. "
-                f"Redirection manuelle a creer: TCP {port} vers {local_ip}:{port}."
-            ),
+            message=tr(
+                "Le routeur a refuse l'ouverture UPnP du port {port}: {error}. "
+                "Redirection manuelle a creer: TCP {port} vers {ip}:{port}."
+            ).format(port=port, error=exc, ip=local_ip),
             public_ip=external_ip,
             local_ip=local_ip,
             connect_address=address,
@@ -145,7 +147,7 @@ def open_minecraft_port(port: int, description: str = "Minecraft Server") -> Por
     address = connection_address(port, external_ip)
     return PortMappingResult(
         ok=True,
-        message=f"Port TCP {port} ouvert automatiquement vers {local_ip}:{port}.",
+        message=tr("Port TCP {port} ouvert automatiquement vers {ip}:{port}.").format(port=port, ip=local_ip),
         public_ip=external_ip,
         local_ip=local_ip,
         connect_address=address,
@@ -176,7 +178,7 @@ def list_port_mappings(candidate_ports: "list[int] | None" = None) -> tuple[list
     """
     upnp = _discover_upnp_gateway()
     if not upnp:
-        return [], "Aucun routeur UPnP detecte."
+        return [], tr("Aucun routeur UPnP detecte.")
 
     control_url, service_type, _router = upnp
     mappings: list[PortMapping] = []
@@ -240,7 +242,7 @@ def list_port_mappings(candidate_ports: "list[int] | None" = None) -> tuple[list
 def delete_port_mapping(external_port: int, protocol: str = "TCP") -> tuple[bool, str]:
     upnp = _discover_upnp_gateway()
     if not upnp:
-        return False, "Aucun routeur UPnP detecte."
+        return False, tr("Aucun routeur UPnP detecte.")
 
     control_url, service_type, _router = upnp
     try:
@@ -279,6 +281,19 @@ def _discover_upnp_gateway(timeout: float = 3.0) -> tuple[str, str, str] | None:
     locations: list[str] = []
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sock:
         sock.settimeout(timeout)
+        # On a machine with more than one network adapter (VPN, Docker
+        # Desktop, WSL2, Hyper-V/VMware virtual switches...), the OS may pick
+        # a virtual interface with no path to the real router as the default
+        # route for multicast, so the SSDP request never reaches it and this
+        # silently "finds no UPnP gateway" even though the router supports
+        # it. Force the send out through the same interface used for real
+        # LAN/internet traffic instead of leaving it to the OS default.
+        local_ip = local_lan_ip()
+        if local_ip and local_ip != "127.0.0.1":
+            try:
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
+            except OSError:
+                pass
         for target in targets:
             sock.sendto(request_template.format(target=target).encode("ascii"), ("239.255.255.250", 1900))
         while True:

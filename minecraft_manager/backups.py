@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import re
 import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
 from .models import ServerProfile
+
+
+def _safe_filename_part(text: str) -> str:
+    """Strip characters that are invalid in Windows/macOS file names."""
+    cleaned = re.sub(r'[\\/:*?"<>|]+', "", text).strip()
+    return cleaned or "serveur"
 
 
 BACKUP_ITEMS = [
@@ -29,7 +36,7 @@ def backups_dir(profile: ServerProfile) -> Path:
 
 def create_backup(profile: ServerProfile, label: str = "manual") -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    archive = backups_dir(profile) / f"{profile.name}-{label}-{stamp}.zip"
+    archive = backups_dir(profile) / f"{_safe_filename_part(profile.name)}-{label}-{stamp}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in BACKUP_ITEMS:
             source = profile.folder_path / item
