@@ -7,6 +7,8 @@ import zipfile
 from pathlib import Path
 from typing import List
 
+from .i18n import tr
+
 
 class ModpackError(RuntimeError):
     pass
@@ -16,7 +18,7 @@ def _safe_target(base: Path, relative: str) -> Path:
     target = (base / relative).resolve()
     base_resolved = base.resolve()
     if base_resolved != target and base_resolved not in target.parents:
-        raise ModpackError(f"Chemin dangereux dans le modpack: {relative}")
+        raise ModpackError(tr("Chemin dangereux dans le modpack: {path}").format(path=relative))
     return target
 
 
@@ -42,7 +44,7 @@ def import_modpack(archive_path: str, server_folder: Path) -> List[str]:
 
     archive = Path(archive_path).expanduser()
     if not archive.exists():
-        raise ModpackError(f"Modpack introuvable: {archive}")
+        raise ModpackError(tr("Modpack introuvable: {path}").format(path=archive))
 
     notes: List[str] = []
     with zipfile.ZipFile(archive, "r") as zf:
@@ -52,7 +54,7 @@ def import_modpack(archive_path: str, server_folder: Path) -> List[str]:
             notes.extend(_import_modrinth_pack(zf, server_folder, root_prefix))
         elif "manifest.json" in names and any(name.startswith("overrides/") for name in names):
             notes.extend(_extract_prefixed_folder(zf, server_folder, "overrides/", root_prefix))
-            notes.append("Modpack CurseForge: overrides importés. Les mods du manifeste nécessitent souvent le launcher CurseForge.")
+            notes.append(tr("Modpack CurseForge: overrides importés. Les mods du manifeste nécessitent souvent le launcher CurseForge."))
         else:
             notes.extend(_extract_server_zip(zf, server_folder, root_prefix))
     return notes
@@ -106,8 +108,8 @@ def _extract_server_zip(zf: zipfile.ZipFile, server_folder: Path, root_prefix: s
             continue
         _extract_member(zf, member, server_folder, name)
         count += 1
-    flatten_note = "dossier racine aplati, " if root_prefix else ""
-    return [f"Modpack serveur importé ({flatten_note}{count} élément(s))."]
+    flatten_note = tr("dossier racine aplati, ") if root_prefix else ""
+    return [tr("Modpack serveur importé ({flatten}{count} élément(s)).").format(flatten=flatten_note, count=count)]
 
 
 def _extract_prefixed_folder(zf: zipfile.ZipFile, server_folder: Path, prefix: str, root_prefix: str = "") -> List[str]:
@@ -121,7 +123,7 @@ def _extract_prefixed_folder(zf: zipfile.ZipFile, server_folder: Path, prefix: s
             continue
         _extract_member(zf, member, server_folder, relative)
         count += 1
-    return [f"Dossier {prefix.rstrip('/')} importé ({count} élément(s))."]
+    return [tr("Dossier {name} importé ({count} élément(s)).").format(name=prefix.rstrip('/'), count=count)]
 
 
 def _import_modrinth_pack(zf: zipfile.ZipFile, server_folder: Path, root_prefix: str = "") -> List[str]:
@@ -146,5 +148,5 @@ def _import_modrinth_pack(zf: zipfile.ZipFile, server_folder: Path, root_prefix:
         _download_file(downloads[0], target)
         downloaded += 1
 
-    notes.append(f"Modpack Modrinth importé: {downloaded} fichier(s) téléchargé(s), {skipped} ignoré(s).")
+    notes.append(tr("Modpack Modrinth importé: {downloaded} fichier(s) téléchargé(s), {skipped} ignoré(s).").format(downloaded=downloaded, skipped=skipped))
     return notes

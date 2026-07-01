@@ -6,6 +6,8 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, List
 
+from .i18n import tr
+
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 FORGE_PROMOTIONS_URL = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
@@ -35,13 +37,13 @@ class VanillaDownloader:
         manifest = self.fetch_manifest()
         match = next((item for item in manifest.get("versions", []) if item.get("id") == version), None)
         if not match:
-            raise DownloadError(f"Version Minecraft introuvable: {version}")
+            raise DownloadError(tr("Version Minecraft introuvable: {version}").format(version=version))
 
         with urllib.request.urlopen(_request(match["url"]), timeout=20) as response:
             version_meta = json.loads(response.read().decode("utf-8"))
         server_info = version_meta.get("downloads", {}).get("server")
         if not server_info or not server_info.get("url"):
-            raise DownloadError(f"Aucun server.jar officiel disponible pour {version}")
+            raise DownloadError(tr("Aucun server.jar officiel disponible pour {version}").format(version=version))
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         with urllib.request.urlopen(_request(server_info["url"]), timeout=60) as response, destination.open("wb") as fh:
@@ -66,7 +68,7 @@ class ForgeDownloader:
         if not forge_build and channel == "recommended":
             forge_build = promotions.get(f"{minecraft_version}-latest")
         if not forge_build:
-            raise DownloadError(f"Aucune version Forge {channel} trouvée pour Minecraft {minecraft_version}")
+            raise DownloadError(tr("Aucune version Forge {channel} trouvée pour Minecraft {version}").format(channel=channel, version=minecraft_version))
         return f"{minecraft_version}-{forge_build}"
 
     def installer_url(self, full_version: str) -> str:

@@ -9,6 +9,7 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
+from .i18n import tr
 from .java_runtime import JavaNotFoundError, find_java
 from .models import ServerProfile
 from .setup import find_start_script, is_modded_type
@@ -45,7 +46,7 @@ class ServerRunner(QObject):
             program, args = self._build_command(java)
         except JavaNotFoundError as exc:
             self.log_line.emit(str(exc))
-            self.log_line.emit(f"Installe Java {self.profile.java_version}, puis relance le serveur.")
+            self.log_line.emit(tr("Installe Java {version}, puis relance le serveur.").format(version=self.profile.java_version))
             self.state_changed.emit("erreur")
             self.java_missing.emit(self.profile.java_version)
             return
@@ -68,7 +69,12 @@ class ServerRunner(QObject):
         # inside this app. JAVA_TOOL_OPTIONS is honored by the "java" binary
         # no matter how it's invoked, including from run.sh start scripts.
         existing_tool_options = env.value("JAVA_TOOL_OPTIONS")
-        headless_flag = "-Djava.awt.headless=true"
+        # Also force UTF-8 I/O: on Java releases older than 18 (still
+        # supported here for Minecraft <=1.16), the JVM's default encoding
+        # follows the OS locale, which on non-English Windows is a legacy
+        # code page - accented player names/MOTD/log lines would otherwise
+        # come out corrupted since the console below always decodes as UTF-8.
+        headless_flag = "-Djava.awt.headless=true -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
         env.insert(
             "JAVA_TOOL_OPTIONS",
             f"{existing_tool_options} {headless_flag}" if existing_tool_options else headless_flag,
@@ -76,7 +82,7 @@ class ServerRunner(QObject):
         self.process.setProcessEnvironment(env)
         self.process.setProcessChannelMode(QProcess.MergedChannels)
         self.process.readyReadStandardOutput.connect(self._read_output)
-        self.process.errorOccurred.connect(lambda error: self.log_line.emit(f"Erreur de lancement Java: {error}"))
+        self.process.errorOccurred.connect(lambda error: self.log_line.emit(tr("Erreur de lancement Java: {error}").format(error=error)))
         self.process.started.connect(lambda: self.state_changed.emit("demarre"))
         self.process.finished.connect(lambda *_: self.state_changed.emit("arrete"))
         self.process.start()
@@ -185,11 +191,11 @@ class ServerRunner(QObject):
         if "Are you sure you want to continue? (Yes/No):" in text and "path-spaces" not in self._answered_prompts:
             self.process.write(b"Yes\n")
             self._answered_prompts.add("path-spaces")
-            self.log_line.emit("Chemin avec espaces confirmé automatiquement pour le script du pack.")
+            self.log_line.emit(tr("Chemin avec espaces confirmé automatiquement pour le script du pack."))
         if "Type 'I agree'" in text and "jabba-consent" not in self._answered_prompts:
             self.process.write(b"I agree\n")
             self._answered_prompts.add("jabba-consent")
-            self.log_line.emit("Installation Java automatique du pack autorisée.")
+            self.log_line.emit(tr("Installation Java automatique du pack autorisée."))
 
 
 def port_is_free(port: int, host: str = "127.0.0.1") -> bool:

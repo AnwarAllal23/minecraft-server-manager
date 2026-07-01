@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from .downloader import ForgeDownloader, VanillaDownloader
+from .i18n import tr
 from .java_runtime import JavaNotFoundError, find_java
 from .models import ServerProfile
 from .modpacks import import_modpack
@@ -140,11 +141,11 @@ def create_forge_server(profile: ServerProfile, download: bool = True) -> list[s
     variables = read_serverpack_variables(folder)
     if start_script and variables:
         configure_start_script_server(profile)
-        notes.append(f"Script serveur détecté: {start_script.name}.")
-        notes.append("variables.txt configuré pour Java et la RAM de l’application.")
+        notes.append(tr("Script serveur détecté: {name}.").format(name=start_script.name))
+        notes.append(tr("variables.txt configuré pour Java et la RAM de l’application."))
         duplicates = find_duplicate_mods(folder)
         if duplicates:
-            notes.append("Mods dupliqués détectés:\n" + format_duplicate_mods(duplicates))
+            notes.append(tr("Mods dupliqués détectés:") + "\n" + format_duplicate_mods(duplicates))
         return notes
 
     modloader = canonical_modloader(profile.server_type) or "Forge"
@@ -153,7 +154,7 @@ def create_forge_server(profile: ServerProfile, download: bool = True) -> list[s
     if existing_install:
         modloader, full_version, modloader_version = existing_install
         installer = None
-        notes.append(f"Installation {modloader} déjà présente: {full_version}.")
+        notes.append(tr("Installation {modloader} déjà présente: {version}.").format(modloader=modloader, version=full_version))
     elif embedded_installer:
         modloader = modloader_from_installer(embedded_installer) or modloader
         modloader_version = modloader_version_from_installer(embedded_installer) or profile.forge_version
@@ -163,12 +164,14 @@ def create_forge_server(profile: ServerProfile, download: bool = True) -> list[s
             or modloader_version
         )
         installer = embedded_installer
-        notes.append(f"Installateur {modloader} inclus détecté: {installer.name}.")
+        notes.append(tr("Installateur {modloader} inclus détecté: {name}.").format(modloader=modloader, name=installer.name))
     else:
         if modloader != "Forge":
             raise RuntimeError(
-                f"{modloader} est reconnu, mais ce profil n’a pas de script serveur ni d’installateur utilisable. "
-                "Importe le pack serveur complet avec start.sh/variables.txt ou l’installateur serveur inclus."
+                tr(
+                    "{modloader} est reconnu, mais ce profil n’a pas de script serveur ni d’installateur utilisable. "
+                    "Importe le pack serveur complet avec start.sh/variables.txt ou l’installateur serveur inclus."
+                ).format(modloader=modloader)
             )
         downloader = ForgeDownloader()
         full_version = downloader.resolve_full_version(profile.version, profile.forge_version)
@@ -179,9 +182,11 @@ def create_forge_server(profile: ServerProfile, download: bool = True) -> list[s
                 downloader.download_installer(full_version, installer)
             except Exception as exc:
                 raise RuntimeError(
-                    "Téléchargement Forge impossible. Si ton pack CurseForge contient déjà "
-                    "un fichier forge-...-installer.jar, vérifie que tu importes bien le ZIP serveur complet.\n"
-                    f"Détail: {exc}"
+                    tr(
+                        "Téléchargement Forge impossible. Si ton pack CurseForge contient déjà "
+                        "un fichier forge-...-installer.jar, vérifie que tu importes bien le ZIP serveur complet.\n"
+                        "Détail: {error}"
+                    ).format(error=exc)
                 ) from exc
 
     profile.server_type = modloader
@@ -193,17 +198,24 @@ def create_forge_server(profile: ServerProfile, download: bool = True) -> list[s
 
     if installer:
         java = profile.java_path or find_java(profile.java_version)
+        popen_kwargs = {}
+        if sys.platform.startswith("win"):
+            # java.exe is a console-subsystem executable: without this flag
+            # Windows briefly flashes a console window for the installer,
+            # even though its output is fully captured below.
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         result = subprocess.run(
             [java, "-jar", installer.name, "--installServer"],
             cwd=str(folder),
             text=True,
             capture_output=True,
             check=False,
+            **popen_kwargs,
         )
         if result.returncode != 0:
             output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
-            raise RuntimeError(f"Installation {modloader} échouée pour {full_version}.\n{output}")
-        notes.append(f"{modloader} {full_version} installé.")
+            raise RuntimeError(tr("Installation {modloader} échouée pour {version}.\n{output}").format(modloader=modloader, version=full_version, output=output))
+        notes.append(tr("{modloader} {version} installé.").format(modloader=modloader, version=full_version))
 
     forge_server_jars = sorted(folder.glob(f"forge-{full_version}*-server.jar"))
     if forge_server_jars:
@@ -212,7 +224,7 @@ def create_forge_server(profile: ServerProfile, download: bool = True) -> list[s
         profile.jar_file = "forge-run"
     duplicates = find_duplicate_mods(folder)
     if duplicates:
-        notes.append("Mods dupliqués détectés:\n" + format_duplicate_mods(duplicates))
+        notes.append(tr("Mods dupliqués détectés:") + "\n" + format_duplicate_mods(duplicates))
     return notes
 
 
@@ -432,7 +444,7 @@ def analyze_server_folder(folder: Path) -> ServerImportAnalysis:
     detected_file_type, detected_file_version, detected_jar = _detect_modloader_from_files(folder)
     server_type = server_type or detected_file_type
     modloader_version = modloader_version or detected_file_version
-    source = source or ("fichiers serveur" if detected_file_type else "")
+    source = source or (tr("fichiers serveur") if detected_file_type else "")
 
     server_type = server_type if server_type in SUPPORTED_MODLOADERS else ("Forge" if looks_like_modded_server(folder) else "Custom")
     minecraft_version = minecraft_version or "custom"
@@ -451,7 +463,7 @@ def analyze_server_folder(folder: Path) -> ServerImportAnalysis:
         modloader_version=modloader_version,
         java_version=java_version,
         jar_file=jar_file,
-        source=source or "dossier",
+        source=source or tr("dossier"),
     )
 
 
@@ -552,6 +564,14 @@ def _detect_quilt_loader_version(folder: Path) -> str:
     return versions[-1] if versions else ""
 
 
+def _safe_port(value: Optional[str], default: int = 25565) -> int:
+    """Parse a server-port value from a possibly hand-edited/foreign server.properties."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def configure_imported_server(folder: Path) -> tuple[ServerProfile, list[str]]:
     props = read_properties(folder / "server.properties")
     notes: list[str] = []
@@ -567,7 +587,7 @@ def configure_imported_server(folder: Path) -> tuple[ServerProfile, list[str]]:
             name=folder.name,
             folder=str(folder),
             version=analysis.minecraft_version,
-            port=int(props.get("server-port", "25565")),
+            port=_safe_port(props.get("server-port")),
             ram_min_gb=ram_min,
             ram_max_gb=ram_max,
             server_type=analysis.server_type,
@@ -584,17 +604,17 @@ def configure_imported_server(folder: Path) -> tuple[ServerProfile, list[str]]:
             write_properties(folder / "server.properties", profile.properties)
             if not profile.eula_path.exists():
                 profile.eula_path.write_text("eula=false\n", encoding="utf-8")
-            notes.append(f"{analysis.summary()} détecté depuis {analysis.source}.")
+            notes.append(tr("{summary} détecté depuis {source}.").format(summary=analysis.summary(), source=analysis.source))
         return profile, notes
 
     jar_files = [jar for jar in sorted(folder.glob("*.jar")) if not jar.name.endswith("-installer.jar")]
     if not jar_files:
-        raise RuntimeError("Aucun fichier serveur .jar utilisable trouvé. Les installateurs Forge ne sont pas lancés comme serveur.")
+        raise RuntimeError(tr("Aucun fichier serveur .jar utilisable trouvé. Les installateurs Forge ne sont pas lancés comme serveur."))
     profile = ServerProfile(
         name=folder.name,
         folder=str(folder),
         version="custom",
-        port=int(props.get("server-port", "25565")),
+        port=_safe_port(props.get("server-port")),
         ram_min_gb=2,
         ram_max_gb=4,
         server_type="Custom",

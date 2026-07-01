@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
+from .i18n import set_language
 from .settings import SettingsStore
 from .style import style_for_mode
 from .ui import MainWindow
@@ -23,7 +24,9 @@ def main() -> None:
     app.setApplicationName("Gestion Serveurs Minecraft")
     if ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(ICON_PATH)))
-    app.setStyleSheet(style_for_mode(SettingsStore().get_str("theme_mode")))
+    settings = SettingsStore()
+    app.setStyleSheet(style_for_mode(settings.get_str("theme_mode")))
+    set_language(settings.get_str("language"))
     window = MainWindow()
     window.resize(1280, 780)
     window.show()

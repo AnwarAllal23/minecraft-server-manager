@@ -6,6 +6,8 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
+from .i18n import tr
+
 
 class MetricChart(QWidget):
     def __init__(self, title: str, color: str, suffix: str = "") -> None:
@@ -54,7 +56,7 @@ class MetricChart(QWidget):
 
         if len(self.values) < 2:
             painter.setPen(QColor("#9ca3af"))
-            painter.drawText(inner, Qt.AlignCenter, "En attente de données")
+            painter.drawText(inner, Qt.AlignCenter, tr("En attente de données"))
             return
 
         scale = self.max_value or max(max(self.values) * 1.2, 1.0)

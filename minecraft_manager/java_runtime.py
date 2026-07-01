@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from .i18n import tr
 from .models import app_data_dir
 
 
@@ -35,9 +36,9 @@ def find_java(version: str = "17") -> str:
         return str(system)
     if version:
         if not _major(version):
-            raise JavaNotFoundError(f"Version Java invalide: {version}.")
+            raise JavaNotFoundError(tr("Version Java invalide: {version}.").format(version=version))
         raise JavaNotFoundError(
-            f"Java {version} est introuvable. Installe Temurin {version} ou configure un chemin Java compatible."
+            tr("Java {version} est introuvable. Installe Temurin {version} ou configure un chemin Java compatible.").format(version=version)
         )
     java = shutil.which("java")
     return java or "java"
@@ -58,7 +59,7 @@ def managed_java_root() -> Path:
 def download_java(version: str, progress: Optional[Callable[[int, int], None]] = None) -> str:
     major = _major(version)
     if not major:
-        raise JavaNotFoundError("Version Java invalide.")
+        raise JavaNotFoundError(tr("Version Java invalide."))
 
     os_name = _adoptium_os()
     arch = _adoptium_arch()
@@ -82,9 +83,9 @@ def download_java(version: str, progress: Optional[Callable[[int, int], None]] =
 
         java = _first_java_in(extract_dir)
         if not java:
-            raise JavaNotFoundError("Le JDK telecharge ne contient pas de binaire Java utilisable.")
+            raise JavaNotFoundError(tr("Le JDK telecharge ne contient pas de binaire Java utilisable."))
         if _java_major(java) != major:
-            raise JavaNotFoundError(f"Le JDK telecharge n'est pas Java {major}.")
+            raise JavaNotFoundError(tr("Le JDK telecharge n'est pas Java {major}.").format(major=major))
         jdk_root = _jdk_root_from_java(java)
         if target_dir.exists():
             shutil.rmtree(target_dir)
@@ -94,7 +95,7 @@ def download_java(version: str, progress: Optional[Callable[[int, int], None]] =
 
     java = _find_managed_jdk(major)
     if not java:
-        raise JavaNotFoundError(f"Java {major} a ete telecharge, mais l'application ne le retrouve pas.")
+        raise JavaNotFoundError(tr("Java {major} a ete telecharge, mais l'application ne le retrouve pas.").format(major=major))
     return str(java)
 
 
@@ -113,7 +114,7 @@ def _download_file(url: str, destination: Path, progress: Optional[Callable[[int
                 if progress:
                     progress(downloaded, total)
     if not destination.exists() or destination.stat().st_size == 0:
-        raise JavaNotFoundError("Telechargement Java incomplet.")
+        raise JavaNotFoundError(tr("Telechargement Java incomplet."))
 
 
 def _safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
@@ -123,7 +124,7 @@ def _safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
         try:
             target.relative_to(root)
         except ValueError as exc:
-            raise JavaNotFoundError("Archive Java invalide.") from exc
+            raise JavaNotFoundError(tr("Archive Java invalide.")) from exc
     tar.extractall(destination)
 
 
@@ -134,7 +135,7 @@ def _safe_extract_zip(zf: zipfile.ZipFile, destination: Path) -> None:
         try:
             target.relative_to(root)
         except ValueError as exc:
-            raise JavaNotFoundError("Archive Java invalide.") from exc
+            raise JavaNotFoundError(tr("Archive Java invalide.")) from exc
     zf.extractall(destination)
 
 
@@ -287,7 +288,7 @@ def _jdk_root_from_java(java: Path) -> Path:
         return java.parents[3]
     if len(parts) >= 2 and parts[-2] == "bin" and java.name in _java_binary_names():
         return java.parents[1]
-    raise JavaNotFoundError("Structure du JDK telecharge non reconnue.")
+    raise JavaNotFoundError(tr("Structure du JDK telecharge non reconnue."))
 
 
 def _first_matching_java(root: Path, major: str) -> Optional[Path]:
@@ -334,11 +335,17 @@ def _find_system_java(version: str) -> str:
 
 
 def _java_major(java: Path) -> str:
+    # java.exe is a console-subsystem executable: this is called once per
+    # candidate found while searching for a Java runtime, and without
+    # CREATE_NO_WINDOW each call can briefly flash a console window on
+    # Windows even though stdout/stderr are fully captured here.
+    popen_kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if _is_windows() else {}
     try:
         output = subprocess.check_output(
             [str(java), "-version"],
             text=True,
             stderr=subprocess.STDOUT,
+            **popen_kwargs,
         )
     except (OSError, subprocess.CalledProcessError):
         return ""

@@ -8,6 +8,7 @@ import urllib.request
 import json
 import os
 import sys
+import zipfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -52,6 +53,7 @@ from PySide6.QtWidgets import (
 from .backups import backup_files, backups_dir, create_backup, restore_backup
 from .charts import MetricChart
 from .downloader import VanillaDownloader
+from .i18n import LANGUAGES, set_language, tr
 from .java_runtime import JavaNotFoundError, download_java, find_java, managed_java_root
 from .models import DEFAULT_PROPERTIES, ServerProfile, app_data_dir
 from . import __version__
@@ -145,6 +147,23 @@ COMMAND_SUGGESTIONS = [
     "/gamerule ",
 ]
 
+def _bool_property_labels() -> Dict[str, str]:
+    return {
+        "online-mode": tr("Mode en ligne"),
+        "white-list": tr("Whitelist"),
+        "pvp": tr("PvP"),
+        "enable-command-block": tr("Blocs de commande"),
+        "allow-flight": tr("Vol autorisé"),
+        "hardcore": tr("Hardcore"),
+        "enable-rcon": tr("RCON"),
+        "enforce-secure-profile": tr("Profils sécurisés"),
+        "prevent-proxy-connections": tr("Anti-proxy"),
+    }
+
+
+# Kept as module-level constants (English/French-independent) since they're
+# used as dict keys and to build ADVANCED_PROPERTY_KEYS below - only the
+# *labels* shown next to the toggles are translated, via _bool_property_labels().
 BOOL_PROPERTY_LABELS = {
     "online-mode": "Mode en ligne",
     "white-list": "Whitelist",
@@ -159,13 +178,42 @@ BOOL_PROPERTY_LABELS = {
 
 ADVANCED_PROPERTY_KEYS = [key for key in DEFAULT_PROPERTIES if key not in BOOL_PROPERTY_LABELS]
 
+NUMERIC_PROPERTY_KEYS = {"server-port", "max-players", "view-distance", "simulation-distance"}
+
 
 def machine_label() -> str:
     if sys.platform == "darwin":
-        return "ce Mac"
+        return tr("ce Mac")
     if os.name == "nt":
-        return "ce PC"
-    return "cette machine"
+        return tr("ce PC")
+    return tr("cette machine")
+
+
+# ServerRunner/state_changed emits these as internal state identifiers
+# ("demarre"/"arrete"/"erreur"); they're also compared against elsewhere in
+# this module, so they must stay untranslated at the source. This maps them
+# to a translated label purely for display in status_label etc.
+_RUN_STATE_LABELS = {
+    "demarre": "démarré",
+    "arrete": "arrêté",
+    "erreur": "erreur",
+}
+
+
+def display_run_state(state: str) -> str:
+    return tr(_RUN_STATE_LABELS.get(state, state))
+
+
+# Same idea for PlayerSession.status ("connecte"/"deconnecte"), stored as-is
+# in profiles.json and compared elsewhere (e.g. `status == "connecte"`).
+_PLAYER_STATUS_LABELS = {
+    "connecte": "connecté",
+    "deconnecte": "déconnecté",
+}
+
+
+def display_player_status(status: str) -> str:
+    return tr(_PLAYER_STATUS_LABELS.get(status, status))
 
 
 def open_folder(path: Path) -> None:
@@ -419,6 +467,11 @@ def slugify_server_name(name: str) -> str:
     """
     cleaned = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
+    # A name that's only dots (".", "..") would otherwise resolve to the
+    # current/parent directory once joined with base_dir; trailing dots are
+    # also silently stripped by Windows, which would desync the stored
+    # folder name from what's actually created on disk.
+    cleaned = cleaned.strip(". ")
     return cleaned or "Serveur Minecraft"
 
 
@@ -444,7 +497,7 @@ def unique_server_folder(base_dir: Path, name: str, taken: set) -> Path:
 class NewServerDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None, existing_profiles: Optional[List[ServerProfile]] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Nouveau serveur")
+        self.setWindowTitle(tr("Nouveau serveur"))
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
 
@@ -454,9 +507,9 @@ class NewServerDialog(QDialog):
         self._folder_is_auto = True
 
         form = QFormLayout()
-        self.name = QLineEdit("Serveur Minecraft")
+        self.name = QLineEdit(tr("Serveur Minecraft"))
         self.folder = QLineEdit()
-        browse = QPushButton("Choisir")
+        browse = QPushButton(tr("Choisir"))
         browse.clicked.connect(self.choose_folder)
         folder_row = QHBoxLayout()
         folder_row.addWidget(self.folder)
@@ -469,10 +522,10 @@ class NewServerDialog(QDialog):
         self.version.setEditable(True)
         self.version.addItems(COMMON_VERSIONS)
         self.forge_version = QLineEdit("recommended")
-        self.forge_version.setPlaceholderText("recommended, latest ou ex: 47.4.20")
+        self.forge_version.setPlaceholderText(tr("recommended, latest ou ex: 47.4.20"))
         self.modpack = QLineEdit()
-        self.modpack.setPlaceholderText("Optionnel: pack serveur .zip ou .mrpack")
-        modpack_browse = QPushButton("Importer")
+        self.modpack.setPlaceholderText(tr("Optionnel: pack serveur .zip ou .mrpack"))
+        modpack_browse = QPushButton(tr("Importer"))
         modpack_browse.clicked.connect(self.choose_modpack)
         self.modpack_row = QHBoxLayout()
         self.modpack_row.addWidget(self.modpack)
@@ -486,25 +539,25 @@ class NewServerDialog(QDialog):
         self.ram_max = QSpinBox()
         self.ram_max.setRange(1, 128)
         self.ram_max.setValue(4)
-        self.info = QLabel(f"RAM disponible sur {machine_label()}: {available_memory_gb():.1f} Go")
+        self.info = QLabel(tr("RAM disponible sur {machine}: {ram:.1f} Go").format(machine=machine_label(), ram=available_memory_gb()))
 
-        form.addRow("Nom", self.name)
-        form.addRow("Dossier", folder_row)
-        form.addRow("Type", self.server_type)
-        form.addRow("Version Minecraft", self.version)
-        self.forge_label = QLabel("Version Forge")
+        form.addRow(tr("Nom"), self.name)
+        form.addRow(tr("Dossier"), folder_row)
+        form.addRow(tr("Type"), self.server_type)
+        form.addRow(tr("Version Minecraft"), self.version)
+        self.forge_label = QLabel(tr("Version Forge"))
         form.addRow(self.forge_label, self.forge_version)
-        self.modpack_label = QLabel("Modpack")
+        self.modpack_label = QLabel(tr("Modpack"))
         form.addRow(self.modpack_label, self.modpack_row)
-        form.addRow("Port", self.port)
-        form.addRow("RAM minimale (Go)", self.ram_min)
-        form.addRow("RAM maximale (Go)", self.ram_max)
+        form.addRow(tr("Port"), self.port)
+        form.addRow(tr("RAM minimale (Go)"), self.ram_min)
+        form.addRow(tr("RAM maximale (Go)"), self.ram_max)
         layout.addLayout(form)
         layout.addWidget(self.info)
 
         buttons = QHBoxLayout()
-        cancel = QPushButton("Annuler")
-        create = QPushButton("Créer")
+        cancel = QPushButton(tr("Annuler"))
+        create = QPushButton(tr("Créer"))
         cancel.clicked.connect(self.reject)
         create.clicked.connect(self.accept)
         buttons.addStretch()
@@ -550,41 +603,43 @@ class NewServerDialog(QDialog):
             if widget:
                 widget.setVisible(is_forge)
         if value not in {"Vanilla", "Forge"}:
-            QMessageBox.information(self, "Type pas encore disponible", "Cette version crée des serveurs Vanilla et Forge. Paper/Fabric/Custom arrivent ensuite.")
+            QMessageBox.information(self, tr("Type pas encore disponible"), tr("Cette version crée des serveurs Vanilla et Forge. Paper/Fabric/Custom arrivent ensuite."))
             self.server_type.setCurrentText("Vanilla")
 
     def choose_modpack(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Importer un modpack",
+            tr("Importer un modpack"),
             str(Path.home()),
-            "Modpacks (*.zip *.mrpack);;Archives (*.zip);;Tous les fichiers (*)",
+            f"{tr('Modpacks')} (*.zip *.mrpack);;{tr('Archives')} (*.zip);;{tr('Tous les fichiers')} (*)",
         )
         if path:
             self.modpack.setText(path)
 
     def choose_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Choisir le dossier du serveur", str(Path.home()))
+        folder = QFileDialog.getExistingDirectory(self, tr("Choisir le dossier du serveur"), str(Path.home()))
         if folder:
             self._folder_is_auto = False
             self.folder.setText(folder)
 
     def accept(self) -> None:
         if self.ram_min.value() > self.ram_max.value():
-            QMessageBox.warning(self, "RAM invalide", "La RAM minimale ne peut pas être supérieure à la RAM maximale.")
+            QMessageBox.warning(self, tr("RAM invalide"), tr("La RAM minimale ne peut pas être supérieure à la RAM maximale."))
             return
         if not self.name.text().strip():
-            QMessageBox.warning(self, "Nom manquant", "Choisis un nom pour le serveur.")
+            QMessageBox.warning(self, tr("Nom manquant"), tr("Choisis un nom pour le serveur."))
             return
         folder = Path(self.folder.text().strip()).expanduser()
         if folder in self._taken_folders:
             QMessageBox.warning(
                 self,
-                "Dossier déjà utilisé",
-                "Un autre serveur de la liste utilise déjà ce dossier.\n\n"
-                "Chaque serveur doit avoir son propre dossier, sinon leurs fichiers "
-                "(jar, mods, librairies) se mélangent et le type du serveur peut être "
-                "mal détecté au prochain démarrage.",
+                tr("Dossier déjà utilisé"),
+                tr(
+                    "Un autre serveur de la liste utilise déjà ce dossier.\n\n"
+                    "Chaque serveur doit avoir son propre dossier, sinon leurs fichiers "
+                    "(jar, mods, librairies) se mélangent et le type du serveur peut être "
+                    "mal détecté au prochain démarrage."
+                ),
             )
             return
         super().accept()
@@ -666,9 +721,39 @@ class MainWindow(QMainWindow):
         self.timer.start(1500)
 
     def _build_menu(self) -> None:
-        action = QAction("Quitter", self)
-        action.triggered.connect(QApplication.quit)
-        self.menuBar().addMenu("Application").addAction(action)
+        action = QAction(tr("Quitter"), self)
+        # self.close() (rather than QApplication.quit()) so closeEvent()
+        # below runs and gets a chance to stop any running server first.
+        action.triggered.connect(self.close)
+        self.menuBar().addMenu(tr("Application")).addAction(action)
+
+    def closeEvent(self, event) -> None:
+        running = [runner for runner in self.runners.values() if runner.running]
+        if not running:
+            event.accept()
+            return
+        names = ", ".join(runner.profile.name for runner in running)
+        reply = QMessageBox.question(
+            self,
+            tr("Serveur(s) actif(s)"),
+            tr("{count} serveur(s) encore en cours ({names}). Les arrêter proprement avant de quitter ?").format(count=len(running), names=names),
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Cancel:
+            event.ignore()
+            return
+        if reply == QMessageBox.Yes:
+            for runner in running:
+                runner.stop()
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline and any(runner.running for runner in running):
+                QApplication.processEvents()
+                time.sleep(0.05)
+        for runner in running:
+            if runner.running:
+                runner.kill()
+        event.accept()
 
     def _build_tray_icon(self) -> None:
         """Create the desktop notification icon used by notify().
@@ -680,7 +765,7 @@ class MainWindow(QMainWindow):
             self.tray_icon = None
             return
         self.tray_icon = QSystemTrayIcon(self.style().standardIcon(QStyle.SP_ComputerIcon), self)
-        self.tray_icon.setToolTip("Gestion Serveurs Minecraft")
+        self.tray_icon.setToolTip(tr("Gestion Serveurs Minecraft"))
         self.tray_icon.show()
 
     def notify(self, title: str, message: str, icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.Information) -> None:
@@ -704,19 +789,19 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left.setObjectName("Sidebar")
         left_layout = QVBoxLayout(left)
-        title = QLabel("Mes serveurs")
+        title = QLabel(tr("Mes serveurs"))
         title.setObjectName("SidebarTitle")
         left_layout.addWidget(title)
         self.server_list = QListWidget()
         self.server_list.currentItemChanged.connect(self._selected_server_changed)
         left_layout.addWidget(self.server_list)
 
-        new_btn = QPushButton("+ Nouveau serveur")
+        new_btn = QPushButton(tr("+ Nouveau serveur"))
         new_btn.setObjectName("PrimaryButton")
-        import_btn = QPushButton("Importer")
-        duplicate_btn = QPushButton("Dupliquer")
-        rename_btn = QPushButton("Renommer")
-        delete_btn = QPushButton("Supprimer")
+        import_btn = QPushButton(tr("Importer"))
+        duplicate_btn = QPushButton(tr("Dupliquer"))
+        rename_btn = QPushButton(tr("Renommer"))
+        delete_btn = QPushButton(tr("Supprimer"))
         new_btn.clicked.connect(self.new_server)
         import_btn.clicked.connect(self.import_server)
         duplicate_btn.clicked.connect(self.duplicate_server)
@@ -729,15 +814,15 @@ class MainWindow(QMainWindow):
         root.addWidget(left)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._dashboard_tab(), "Dashboard")
-        self.tabs.addTab(self._console_tab(), "Console")
-        self.tabs.addTab(self._players_tab(), "Joueurs")
-        self.tabs.addTab(self._properties_tab(), "Paramètres serveur")
-        self.tabs.addTab(self._versions_tab(), "Versions Minecraft")
-        self.tabs.addTab(self._backups_tab(), "Backups")
-        self.tabs.addTab(self._ports_tab(), "Ports ouverts")
-        self.tabs.addTab(self._storage_tab(), "Stockage")
-        self.tabs.addTab(self._app_settings_tab(), "Paramètres application")
+        self.tabs.addTab(self._dashboard_tab(), tr("Dashboard"))
+        self.tabs.addTab(self._console_tab(), tr("Console"))
+        self.tabs.addTab(self._players_tab(), tr("Joueurs"))
+        self.tabs.addTab(self._properties_tab(), tr("Paramètres serveur"))
+        self.tabs.addTab(self._versions_tab(), tr("Versions Minecraft"))
+        self.tabs.addTab(self._backups_tab(), tr("Backups"))
+        self.tabs.addTab(self._ports_tab(), tr("Ports ouverts"))
+        self.tabs.addTab(self._storage_tab(), tr("Stockage"))
+        self.tabs.addTab(self._app_settings_tab(), tr("Paramètres application"))
         root.addWidget(self.tabs)
         root.setSizes([280, 980])
 
@@ -747,17 +832,17 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(14)
 
-        self.server_title = QLabel("Aucun serveur sélectionné")
+        self.server_title = QLabel(tr("Aucun serveur sélectionné"))
         self.server_title.setObjectName("PageTitle")
-        self.status_label = QLabel("Statut: arrete")
+        self.status_label = QLabel(tr("Statut: {state}").format(state=display_run_state("arrete")))
         layout.addWidget(self.server_title)
 
         actions = QHBoxLayout()
-        self.start_btn = QPushButton("Démarrer")
+        self.start_btn = QPushButton(tr("Démarrer"))
         self.start_btn.setObjectName("PrimaryButton")
-        self.stop_btn = QPushButton("Arrêter proprement")
-        self.restart_btn = QPushButton("Redémarrer")
-        self.kill_btn = QPushButton("Forcer l’arrêt")
+        self.stop_btn = QPushButton(tr("Arrêter proprement"))
+        self.restart_btn = QPushButton(tr("Redémarrer"))
+        self.kill_btn = QPushButton(tr("Forcer l’arrêt"))
         self.kill_btn.setObjectName("DangerButton")
         self.start_btn.clicked.connect(self.toggle_server)
         self.stop_btn.clicked.connect(self.stop_server)
@@ -778,14 +863,14 @@ class MainWindow(QMainWindow):
         self.ram_bar = QProgressBar()
         self.cpu_bar = QProgressBar()
         self.players_bar = QProgressBar()
-        self.folder_label = QLabel("Taille dossier: -")
-        self.disk_label = QLabel("Disque libre: -")
-        self.ram_alloc_label = QLabel("Allocation RAM: -")
-        grid.addWidget(QLabel("RAM utilisée"), 0, 0)
+        self.folder_label = QLabel(tr("Taille dossier: -"))
+        self.disk_label = QLabel(tr("Disque libre: -"))
+        self.ram_alloc_label = QLabel(tr("Allocation RAM: -"))
+        grid.addWidget(QLabel(tr("RAM utilisée")), 0, 0)
         grid.addWidget(self.ram_bar, 0, 1)
-        grid.addWidget(QLabel("CPU utilisé"), 1, 0)
+        grid.addWidget(QLabel(tr("CPU utilisé")), 1, 0)
         grid.addWidget(self.cpu_bar, 1, 1)
-        grid.addWidget(QLabel("Joueurs connectés"), 2, 0)
+        grid.addWidget(QLabel(tr("Joueurs connectés")), 2, 0)
         grid.addWidget(self.players_bar, 2, 1)
         grid.addWidget(self.ram_alloc_label, 0, 2)
         grid.addWidget(self.folder_label, 1, 2)
@@ -798,11 +883,11 @@ class MainWindow(QMainWindow):
         network_layout.setContentsMargins(16, 14, 16, 14)
         network_layout.setHorizontalSpacing(14)
         network_layout.setVerticalSpacing(8)
-        self.connect_address_label = QLabel("Adresse joueurs: -")
-        self.local_address_label = QLabel("Adresse locale: -")
-        self.port_status_label = QLabel("Port routeur: non vérifié")
-        self.copy_address_btn = QPushButton("Copier l'adresse")
-        self.refresh_network_btn = QPushButton("Ouvrir/vérifier le port")
+        self.connect_address_label = QLabel(tr("Adresse joueurs: -"))
+        self.local_address_label = QLabel(tr("Adresse locale: -"))
+        self.port_status_label = QLabel(tr("Port routeur: non vérifié"))
+        self.copy_address_btn = QPushButton(tr("Copier l'adresse"))
+        self.refresh_network_btn = QPushButton(tr("Ouvrir/vérifier le port"))
         self.copy_address_btn.clicked.connect(self.copy_connect_address)
         self.refresh_network_btn.clicked.connect(self.ensure_selected_port_mapping)
         network_layout.addWidget(self.connect_address_label, 0, 0)
@@ -813,9 +898,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(network)
 
         charts = QSplitter(Qt.Horizontal)
-        self.ram_chart = MetricChart("Graphique RAM serveur", "#0a84ff", " Mo")
-        self.cpu_chart = MetricChart("Graphique CPU serveur", "#ff9f0a", "%")
-        self.disk_chart = MetricChart("Graphique disque serveur", "#30d158", " Mo")
+        self.ram_chart = MetricChart(tr("Graphique RAM serveur"), "#0a84ff", " Mo")
+        self.cpu_chart = MetricChart(tr("Graphique CPU serveur"), "#ff9f0a", "%")
+        self.disk_chart = MetricChart(tr("Graphique disque serveur"), "#30d158", " Mo")
         charts.addWidget(self.ram_chart)
         charts.addWidget(self.cpu_chart)
         charts.addWidget(self.disk_chart)
@@ -839,22 +924,22 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(14, 14, 14, 14)
         header = QHBoxLayout()
-        console_title = QLabel("Console serveur")
+        console_title = QLabel(tr("Console serveur"))
         console_title.setObjectName("PanelTitle")
         header.addWidget(console_title)
         header.addStretch()
         layout.addLayout(header)
         tools = QHBoxLayout()
         log_filter = QComboBox()
-        log_filter.addItems(["TOUT", "INFO", "WARN", "ERROR"])
+        log_filter.addItems([tr("TOUT"), "INFO", "WARN", "ERROR"])
         log_filter.currentTextChanged.connect(self.render_logs)
-        copy_btn = QPushButton("Copier les logs")
-        save_btn = QPushButton("Sauvegarder les logs")
-        clear_btn = QPushButton("Vider l’affichage")
+        copy_btn = QPushButton(tr("Copier les logs"))
+        save_btn = QPushButton(tr("Sauvegarder les logs"))
+        clear_btn = QPushButton(tr("Vider l’affichage"))
         copy_btn.clicked.connect(self.copy_logs)
         save_btn.clicked.connect(self.save_logs)
         clear_btn.clicked.connect(self.clear_logs)
-        tools.addWidget(QLabel("Filtre"))
+        tools.addWidget(QLabel(tr("Filtre")))
         tools.addWidget(log_filter)
         tools.addStretch()
         for button in [copy_btn, save_btn, clear_btn]:
@@ -865,10 +950,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(console)
         command_row = QHBoxLayout()
         command_input = QLineEdit()
-        command_input.setPlaceholderText("Commande serveur, ex: /list")
+        command_input.setPlaceholderText(tr("Commande serveur, ex: /list"))
         command_input.setCompleter(self._command_completer())
         command_input.returnPressed.connect(lambda inp=command_input: self.send_command_from(inp))
-        send = QPushButton("Envoyer")
+        send = QPushButton(tr("Envoyer"))
         send.setObjectName("PrimaryButton")
         send.clicked.connect(lambda _=False, inp=command_input: self.send_command_from(inp))
         command_row.addWidget(command_input)
@@ -895,12 +980,12 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(18, 18, 18, 18)
         self.players_tabs = QTabWidget()
-        self.connected_players_table = self._player_table(["Tête", "Pseudo", "IP", "Port distant", "Connexion", "Statut"])
-        self.seen_players_table = self._player_table(["Tête", "Pseudo", "IP", "Port distant", "Première connexion", "Dernière sortie", "Statut"])
-        self.banned_players_table = self._player_table(["Pseudo", "UUID", "Date", "Source", "Expire", "Raison"], avatars=False)
-        self.players_tabs.addTab(self.connected_players_table, "Connectés")
-        self.players_tabs.addTab(self.seen_players_table, "Déjà connectés")
-        self.players_tabs.addTab(self.banned_players_table, "Bannis")
+        self.connected_players_table = self._player_table([tr("Tête"), tr("Pseudo"), tr("IP"), tr("Port distant"), tr("Connexion"), tr("Statut")])
+        self.seen_players_table = self._player_table([tr("Tête"), tr("Pseudo"), tr("IP"), tr("Port distant"), tr("Première connexion"), tr("Dernière sortie"), tr("Statut")])
+        self.banned_players_table = self._player_table([tr("Pseudo"), tr("UUID"), tr("Date"), tr("Source"), tr("Expire"), tr("Raison")], avatars=False)
+        self.players_tabs.addTab(self.connected_players_table, tr("Connectés"))
+        self.players_tabs.addTab(self.seen_players_table, tr("Déjà connectés"))
+        self.players_tabs.addTab(self.banned_players_table, tr("Bannis"))
         layout.addWidget(self.players_tabs)
         return page
 
@@ -933,11 +1018,11 @@ class MainWindow(QMainWindow):
         self.ram_min_setting.setRange(1, 128)
         self.ram_max_setting = QSpinBox()
         self.ram_max_setting.setRange(1, 128)
-        self.ram_available_label = QLabel(f"RAM disponible sur {machine_label()}: {available_memory_gb():.1f} Go")
-        save_ram = QPushButton("Enregistrer la RAM")
+        self.ram_available_label = QLabel(tr("RAM disponible sur {machine}: {ram:.1f} Go").format(machine=machine_label(), ram=available_memory_gb()))
+        save_ram = QPushButton(tr("Enregistrer la RAM"))
         save_ram.clicked.connect(self.save_ram_settings)
-        ram_layout.addRow("RAM minimale (-Xms)", self.ram_min_setting)
-        ram_layout.addRow("RAM maximale (-Xmx)", self.ram_max_setting)
+        ram_layout.addRow(tr("RAM minimale (-Xms)"), self.ram_min_setting)
+        ram_layout.addRow(tr("RAM maximale (-Xmx)"), self.ram_max_setting)
         ram_layout.addRow("", self.ram_available_label)
         ram_layout.addRow("", save_ram)
         layout.addWidget(ram_box)
@@ -949,7 +1034,7 @@ class MainWindow(QMainWindow):
         switches_layout.setHorizontalSpacing(24)
         switches_layout.setVerticalSpacing(12)
         self.property_switches: Dict[str, ToggleSwitch] = {}
-        for index, (key, label) in enumerate(BOOL_PROPERTY_LABELS.items()):
+        for index, (key, label) in enumerate(_bool_property_labels().items()):
             row = index // 3
             column = (index % 3) * 2
             name = QLabel(label)
@@ -964,10 +1049,10 @@ class MainWindow(QMainWindow):
         self.security_warning.setObjectName("WarningLabel")
         layout.addWidget(self.security_warning)
         self.properties_table = QTableWidget(0, 2)
-        self.properties_table.setHorizontalHeaderLabels(["Paramètre avancé", "Valeur"])
+        self.properties_table.setHorizontalHeaderLabels([tr("Paramètre avancé"), tr("Valeur")])
         self.properties_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.properties_table)
-        save = QPushButton("Enregistrer server.properties")
+        save = QPushButton(tr("Enregistrer server.properties"))
         save.clicked.connect(self.save_properties)
         layout.addWidget(save)
         return page
@@ -979,10 +1064,10 @@ class MainWindow(QMainWindow):
         self.new_version = QComboBox()
         self.new_version.setEditable(True)
         self.new_version.addItems(COMMON_VERSIONS)
-        change = QPushButton("Changer de version avec backup")
+        change = QPushButton(tr("Changer de version avec backup"))
         change.clicked.connect(self.change_version)
-        layout.addRow("Version actuelle", self.current_version_label)
-        layout.addRow("Nouvelle version", self.new_version)
+        layout.addRow(tr("Version actuelle"), self.current_version_label)
+        layout.addRow(tr("Nouvelle version"), self.new_version)
         layout.addRow("", change)
         return page
 
@@ -990,9 +1075,9 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         row = QHBoxLayout()
-        manual = QPushButton("Créer un backup manuel")
-        restore = QPushButton("Restaurer le backup sélectionné")
-        open_dir = QPushButton("Ouvrir le dossier backups")
+        manual = QPushButton(tr("Créer un backup manuel"))
+        restore = QPushButton(tr("Restaurer le backup sélectionné"))
+        open_dir = QPushButton(tr("Ouvrir le dossier backups"))
         manual.clicked.connect(self.create_manual_backup)
         restore.clicked.connect(self.restore_selected_backup)
         open_dir.clicked.connect(self.open_backups_folder)
@@ -1007,8 +1092,8 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         row = QHBoxLayout()
-        refresh = QPushButton("Actualiser")
-        delete_all = QPushButton("Supprimer tous les ports ouverts")
+        refresh = QPushButton(tr("Actualiser"))
+        delete_all = QPushButton(tr("Supprimer tous les ports ouverts"))
         refresh.clicked.connect(self.refresh_open_ports)
         delete_all.clicked.connect(self.delete_all_open_ports)
         row.addWidget(refresh)
@@ -1017,7 +1102,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
         self.ports_table = QTableWidget(0, 5)
         self.ports_table.setHorizontalHeaderLabels(
-            ["Port externe", "Protocole", "Redirigé vers", "Description", ""]
+            [tr("Port externe"), tr("Protocole"), tr("Redirigé vers"), tr("Description"), ""]
         )
         self.ports_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.ports_table.verticalHeader().setVisible(False)
@@ -1029,7 +1114,7 @@ class MainWindow(QMainWindow):
     def _storage_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.storage_label = QLabel("Sélectionne un serveur pour voir le stockage.")
+        self.storage_label = QLabel(tr("Sélectionne un serveur pour voir le stockage."))
         layout.addWidget(self.storage_label)
         layout.addStretch()
         return page
@@ -1038,30 +1123,38 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QFormLayout(page)
         self.data_dir_label = QLabel(str(app_data_dir()))
-        local = QCheckBox("Interface locale uniquement")
+        local = QCheckBox(tr("Interface locale uniquement"))
         local.setChecked(True)
         local.setEnabled(False)
         self.theme_mode = QComboBox()
-        self.theme_mode.addItem("Automatique système", "auto")
-        self.theme_mode.addItem("Clair", "light")
-        self.theme_mode.addItem("Sombre", "dark")
+        self.theme_mode.addItem(tr("Automatique système"), "auto")
+        self.theme_mode.addItem(tr("Clair"), "light")
+        self.theme_mode.addItem(tr("Sombre"), "dark")
         current_theme = self.settings.get_str("theme_mode")
         index = self.theme_mode.findData(current_theme)
         self.theme_mode.setCurrentIndex(index if index >= 0 else 0)
         self.theme_mode.currentIndexChanged.connect(self.save_app_settings)
-        self.download_heads_checkbox = QCheckBox("Télécharger les têtes Minecraft depuis les pseudos")
+        self.language_combo = QComboBox()
+        for code, label in LANGUAGES.items():
+            self.language_combo.addItem(label, code)
+        current_language = self.settings.get_str("language")
+        language_index = self.language_combo.findData(current_language)
+        self.language_combo.setCurrentIndex(language_index if language_index >= 0 else 0)
+        self.language_combo.currentIndexChanged.connect(self.save_app_settings)
+        self.download_heads_checkbox = QCheckBox(tr("Télécharger les têtes Minecraft depuis les pseudos"))
         self.download_heads_checkbox.setChecked(self.settings.get_bool("download_player_heads"))
-        self.download_heads_checkbox.setToolTip("Envoie uniquement le pseudo au service d’avatar public, jamais l’IP ni le port du joueur.")
+        self.download_heads_checkbox.setToolTip(tr("Envoie uniquement le pseudo au service d’avatar public, jamais l’IP ni le port du joueur."))
         self.download_heads_checkbox.stateChanged.connect(self.save_app_settings)
-        self.notifications_checkbox = QCheckBox("Notifications (connexions/déconnexions, RAM, disque, erreurs)")
+        self.notifications_checkbox = QCheckBox(tr("Notifications (connexions/déconnexions, RAM, disque, erreurs)"))
         self.notifications_checkbox.setChecked(self.settings.get_bool("notifications_enabled"))
-        self.notifications_checkbox.setToolTip("Affiche une notification système quand un joueur rejoint/quitte ou en cas de problème (RAM, disque, démarrage).")
+        self.notifications_checkbox.setToolTip(tr("Affiche une notification système quand un joueur rejoint/quitte ou en cas de problème (RAM, disque, démarrage)."))
         self.notifications_checkbox.stateChanged.connect(self.save_app_settings)
-        layout.addRow("Données application", self.data_dir_label)
-        layout.addRow("Thème", self.theme_mode)
-        layout.addRow("Confidentialité", local)
-        layout.addRow("Joueurs", self.download_heads_checkbox)
-        layout.addRow("Notifications", self.notifications_checkbox)
+        layout.addRow(tr("Données application"), self.data_dir_label)
+        layout.addRow(tr("Thème"), self.theme_mode)
+        layout.addRow(tr("Langue"), self.language_combo)
+        layout.addRow(tr("Confidentialité"), local)
+        layout.addRow(tr("Joueurs"), self.download_heads_checkbox)
+        layout.addRow(tr("Notifications"), self.notifications_checkbox)
         return page
 
     def refresh_server_list(self) -> None:
@@ -1069,11 +1162,11 @@ class MainWindow(QMainWindow):
         self.server_list.clear()
         for profile in self.store.profiles:
             running = self._profile_is_running(profile.id)
-            status = "en route" if running else "arrêté"
+            status = tr("en route") if running else tr("arrêté")
             item = QListWidgetItem(f"{profile.name}  ·  {profile.port}  ·  {status}")
             item.setData(Qt.UserRole, profile.id)
             item.setForeground(QBrush(QColor("#30d158" if running else "#8e8e93")))
-            item.setToolTip(f"{profile.name} est {status}.")
+            item.setToolTip(tr("{name} est {status}.").format(name=profile.name, status=status))
             self.server_list.addItem(item)
             if profile.id == current_id:
                 self.server_list.setCurrentItem(item)
@@ -1091,6 +1184,19 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             app.setStyleSheet(style_for_mode(self.settings.get_str("theme_mode")))
+        new_language = self.language_combo.currentData() or "en"
+        if new_language != self.settings.get_str("language"):
+            self.settings.set_str("language", new_language)
+            # The whole widget tree (tab titles, buttons, dialog text...) is
+            # built once from tr() at startup; retranslating it live would
+            # mean rebuilding every widget, so ask for a restart instead -
+            # the new language is already saved and takes effect next launch.
+            set_language(new_language)
+            QMessageBox.information(
+                self,
+                tr("Langue"),
+                tr("Redémarre l'application pour appliquer la nouvelle langue."),
+            )
         self.refresh_players()
 
     def _selected_server_changed(self, item: Optional[QListWidgetItem]) -> None:
@@ -1100,10 +1206,10 @@ class MainWindow(QMainWindow):
     def refresh_current_profile(self) -> None:
         profile = self.current_profile
         if not profile:
-            self.server_title.setText("Aucun serveur sélectionné")
-            self.connect_address_label.setText("Adresse joueurs: -")
-            self.local_address_label.setText("Adresse locale: -")
-            self.port_status_label.setText("Port routeur: non vérifié")
+            self.server_title.setText(tr("Aucun serveur sélectionné"))
+            self.connect_address_label.setText(tr("Adresse joueurs: -"))
+            self.local_address_label.setText(tr("Adresse locale: -"))
+            self.port_status_label.setText(tr("Port routeur: non vérifié"))
             for console_name in ("console", "dashboard_console"):
                 console = getattr(self, console_name, None)
                 if console:
@@ -1113,7 +1219,7 @@ class MainWindow(QMainWindow):
         self.current_version_label.setText(profile.version)
         self.ram_min_setting.setValue(profile.ram_min_gb)
         self.ram_max_setting.setValue(profile.ram_max_gb)
-        self.ram_available_label.setText(f"RAM disponible sur {machine_label()}: {available_memory_gb():.1f} Go")
+        self.ram_available_label.setText(tr("RAM disponible sur {machine}: {ram:.1f} Go").format(machine=machine_label(), ram=available_memory_gb()))
         if (profile.folder_path / "server.properties").exists():
             profile.properties = read_properties(profile.folder_path / "server.properties")
         if profile.id not in self.trackers:
@@ -1131,9 +1237,9 @@ class MainWindow(QMainWindow):
             return
         profile = dialog.profile()
         if any(p.port == profile.port for p in self.store.profiles):
-            QMessageBox.warning(self, "Port déjà utilisé", "Un profil utilise déjà ce port.")
+            QMessageBox.warning(self, tr("Port déjà utilisé"), tr("Un profil utilise déjà ce port."))
             return
-        self.statusBar().showMessage("Création et téléchargement du server.jar...")
+        self.statusBar().showMessage(tr("Création et téléchargement du server.jar..."))
         self.worker = ServerCreateWorker(profile)
         self.worker.finished_ok.connect(self._server_created)
         self.worker.failed.connect(self._server_create_failed)
@@ -1144,33 +1250,33 @@ class MainWindow(QMainWindow):
         self.trackers[profile.id] = PlayerTracker()
         self.logs[profile.id] = []
         self.refresh_server_list()
-        self.statusBar().showMessage("Serveur créé. Ouverture du port routeur...")
+        self.statusBar().showMessage(tr("Serveur créé. Ouverture du port routeur..."))
         self.ensure_port_mapping(profile)
         details = (
-            f"Le serveur {profile.server_type} est prêt. L’application tente maintenant d’ouvrir "
-            f"le port TCP {profile.port} automatiquement via UPnP."
-            "\n\nLe EULA sera demandé explicitement au premier démarrage."
+            tr("Le serveur {type} est prêt. L’application tente maintenant d’ouvrir "
+               "le port TCP {port} automatiquement via UPnP.").format(type=profile.server_type, port=profile.port)
+            + "\n\n" + tr("Le EULA sera demandé explicitement au premier démarrage.")
         )
         if notes:
             details += f"\n\n{notes}"
-        QMessageBox.information(self, "Serveur créé", details)
+        QMessageBox.information(self, tr("Serveur créé"), details)
 
     def _server_create_failed(self, message: str) -> None:
-        self.statusBar().showMessage("Création échouée.", 5000)
-        QMessageBox.critical(self, "Erreur de création", message)
+        self.statusBar().showMessage(tr("Création échouée."), 5000)
+        QMessageBox.critical(self, tr("Erreur de création"), message)
 
     def import_server(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Importer un serveur existant", str(Path.home()))
+        folder = QFileDialog.getExistingDirectory(self, tr("Importer un serveur existant"), str(Path.home()))
         if not folder:
             return
         folder_path = Path(folder)
         if any(Path(p.folder) == folder_path for p in self.store.profiles):
-            QMessageBox.warning(self, "Déjà importé", "Ce dossier serveur est déjà dans la liste.")
+            QMessageBox.warning(self, tr("Déjà importé"), tr("Ce dossier serveur est déjà dans la liste."))
             return
         try:
             analysis = analyze_server_folder(folder_path)
         except Exception as exc:
-            QMessageBox.warning(self, "Analyse du modpack", f"Analyse automatique impossible.\n\n{exc}")
+            QMessageBox.warning(self, tr("Analyse du modpack"), tr("Analyse automatique impossible.\n\n{error}").format(error=exc))
             analysis = None
         if analysis and analysis.is_modded:
             analysis.java_version = normalize_java_version(analysis.java_version, analysis.minecraft_version)
@@ -1178,7 +1284,7 @@ class MainWindow(QMainWindow):
                 find_java(analysis.java_version)
             except JavaNotFoundError:
                 if not self._ask_java_download(analysis.summary(), analysis.java_version):
-                    self.statusBar().showMessage("Import annulé: Java compatible manquant.", 5000)
+                    self.statusBar().showMessage(tr("Import annulé: Java compatible manquant."), 5000)
                     return
                 self.pending_import_folder = folder_path
                 self._download_java_then_import(analysis.java_version)
@@ -1188,13 +1294,15 @@ class MainWindow(QMainWindow):
     def _ask_java_download(self, summary: str, java_version: str) -> bool:
         answer = QMessageBox.question(
             self,
-            f"Java {java_version} requis",
-            "Analyse du modpack:\n"
-            f"{summary}\n\n"
-            f"Java {java_version} est introuvable sur {machine_label()}.\n\n"
-            "Autorises-tu l’application à télécharger Temurin Java "
-            f"{java_version} et à l’installer dans son dossier local ?\n\n"
-            f"{managed_java_root()}",
+            tr("Java {version} requis").format(version=java_version),
+            tr(
+                "Analyse du modpack:\n"
+                "{summary}\n\n"
+                "Java {version} est introuvable sur {machine}.\n\n"
+                "Autorises-tu l’application à télécharger Temurin Java "
+                "{version} et à l’installer dans son dossier local ?\n\n"
+                "{java_root}"
+            ).format(summary=summary, version=java_version, machine=machine_label(), java_root=managed_java_root()),
         )
         return answer == QMessageBox.Yes
 
@@ -1211,10 +1319,10 @@ class MainWindow(QMainWindow):
         start...) without needing to know the install path.
         """
         if self.java_worker and self.java_worker.isRunning():
-            QMessageBox.information(self, "Téléchargement en cours", "Un téléchargement Java est déjà en cours.")
+            QMessageBox.information(self, tr("Téléchargement en cours"), tr("Un téléchargement Java est déjà en cours."))
             return
         self.pending_java_action = on_success
-        self.statusBar().showMessage(f"Téléchargement de Java {java_version}...")
+        self.statusBar().showMessage(tr("Téléchargement de Java {version}...").format(version=java_version))
         self.java_worker = JavaDownloadWorker(java_version)
         self.java_worker.progress.connect(self._java_download_progress)
         self.java_worker.finished_ok.connect(self._java_downloaded)
@@ -1224,12 +1332,12 @@ class MainWindow(QMainWindow):
     def _java_download_progress(self, done: int, total: int) -> None:
         if total:
             percent = int(done * 100 / total)
-            self.statusBar().showMessage(f"Téléchargement Java... {percent}%")
+            self.statusBar().showMessage(tr("Téléchargement Java... {percent}%").format(percent=percent))
         else:
-            self.statusBar().showMessage(f"Téléchargement Java... {done // (1024 * 1024)} Mo")
+            self.statusBar().showMessage(tr("Téléchargement Java... {mb} Mo").format(mb=done // (1024 * 1024)))
 
     def _java_downloaded(self, version: str, java_path: str) -> None:
-        self.statusBar().showMessage(f"Java {version} installé dans l’application.", 5000)
+        self.statusBar().showMessage(tr("Java {version} installé dans l’application.").format(version=version), 5000)
         self.pending_import_folder = None
         action = self.pending_java_action
         self.pending_java_action = None
@@ -1239,11 +1347,11 @@ class MainWindow(QMainWindow):
     def _java_download_failed(self, message: str) -> None:
         self.pending_import_folder = None
         self.pending_java_action = None
-        self.statusBar().showMessage("Téléchargement Java échoué.", 5000)
-        QMessageBox.critical(self, "Téléchargement Java impossible", message)
+        self.statusBar().showMessage(tr("Téléchargement Java échoué."), 5000)
+        QMessageBox.critical(self, tr("Téléchargement Java impossible"), message)
 
     def _start_import_worker(self, folder: Path) -> None:
-        self.statusBar().showMessage("Import du serveur...")
+        self.statusBar().showMessage(tr("Import du serveur..."))
         self.import_worker = ServerImportWorker(folder)
         self.import_worker.finished_ok.connect(self._server_imported)
         self.import_worker.failed.connect(self._server_import_failed)
@@ -1251,14 +1359,14 @@ class MainWindow(QMainWindow):
 
     def _server_imported(self, profile: ServerProfile, notes: str = "") -> None:
         if any(p.folder == profile.folder for p in self.store.profiles):
-            QMessageBox.warning(self, "Déjà importé", "Ce dossier serveur est déjà dans la liste.")
+            QMessageBox.warning(self, tr("Déjà importé"), tr("Ce dossier serveur est déjà dans la liste."))
             self.statusBar().clearMessage()
             return
         self.store.add(profile)
         self.refresh_server_list()
-        self.statusBar().showMessage("Serveur importé. Ouverture du port routeur...")
+        self.statusBar().showMessage(tr("Serveur importé. Ouverture du port routeur..."))
         self.ensure_port_mapping(profile)
-        message = f"{profile.name} a été importé comme serveur {profile.server_type}."
+        message = tr("{name} a été importé comme serveur {type}.").format(name=profile.name, type=profile.server_type)
         if notes:
             message += f"\n\n{notes}"
         # Another frequent CurseForge-import crash: the modpack's
@@ -1266,19 +1374,19 @@ class MainWindow(QMainWindow):
         # has available, so the JVM fails to allocate its heap at startup.
         available_gb = available_memory_gb()
         if available_gb and profile.ram_max_gb > available_gb * 0.9:
-            message += (
-                f"\n\nATTENTION: ce modpack demande {profile.ram_max_gb} Go de RAM, "
-                f"mais {machine_label()} n'a que {available_gb:.1f} Go disponibles. "
+            message += "\n\n" + tr(
+                "ATTENTION: ce modpack demande {needed} Go de RAM, "
+                "mais {machine} n'a que {available:.1f} Go disponibles. "
                 "Réduis l'allocation RAM dans « Paramètres serveur » avant de démarrer, "
                 "sinon le serveur risque de crasher immédiatement."
-            )
+            ).format(needed=profile.ram_max_gb, machine=machine_label(), available=available_gb)
         # On a juste vu un crash causé par des mods dupliqués / un Java
         # incompatible détecté seulement au premier démarrage. Pour éviter ce
         # type de mauvaise surprise, on analyse le dossier de mods tout de
         # suite après l'import (en arrière-plan) et on complète le résumé
         # avant de l'afficher.
         if is_modded_type(profile.server_type) or (profile.folder_path / "mods").exists():
-            self.statusBar().showMessage("Analyse des mods importés...")
+            self.statusBar().showMessage(tr("Analyse des mods importés..."))
             self._pending_import_messages[profile.id] = message
             worker = DuplicateModsWorker(profile.id, profile.folder_path)
             self.duplicate_mods_workers[profile.id] = worker
@@ -1287,41 +1395,41 @@ class MainWindow(QMainWindow):
             worker.failed.connect(self._import_duplicate_mods_failed)
             worker.start()
             return
-        QMessageBox.information(self, "Serveur importé", message)
+        QMessageBox.information(self, tr("Serveur importé"), message)
 
     def _import_duplicate_mods_checked(self, profile_id: str, moved_names: List[str]) -> None:
         self.duplicate_mods_workers.pop(profile_id, None)
         message = self._pending_import_messages.pop(profile_id, "")
         if moved_names:
             message += (
-                "\n\nMods dupliqués désactivés automatiquement (déplacés dans "
-                "mods_disabled_duplicates):\n" + "\n".join(f"- {name}" for name in moved_names)
+                "\n\n" + tr("Mods dupliqués désactivés automatiquement (déplacés dans mods_disabled_duplicates):")
+                + "\n" + "\n".join(f"- {name}" for name in moved_names)
             )
         else:
-            message += "\n\nAucun mod dupliqué détecté."
+            message += "\n\n" + tr("Aucun mod dupliqué détecté.")
         self.statusBar().clearMessage()
-        QMessageBox.information(self, "Serveur importé", message)
+        QMessageBox.information(self, tr("Serveur importé"), message)
 
     def _import_duplicate_mods_conflict(self, profile_id: str, conflict_message: str) -> None:
         self.duplicate_mods_workers.pop(profile_id, None)
         message = self._pending_import_messages.pop(profile_id, "")
         message += (
-            "\n\nATTENTION: des mods dupliqués déclarent encore le même modId et "
-            "peuvent faire crasher le serveur au démarrage.\n\n" + conflict_message
+            "\n\n" + tr("ATTENTION: des mods dupliqués déclarent encore le même modId et "
+                        "peuvent faire crasher le serveur au démarrage.") + "\n\n" + conflict_message
         )
         self.statusBar().clearMessage()
-        QMessageBox.warning(self, "Serveur importé", message)
+        QMessageBox.warning(self, tr("Serveur importé"), message)
 
     def _import_duplicate_mods_failed(self, profile_id: str, error_message: str) -> None:
         self.duplicate_mods_workers.pop(profile_id, None)
         message = self._pending_import_messages.pop(profile_id, "")
-        message += f"\n\nAnalyse des mods dupliqués impossible: {error_message}"
+        message += "\n\n" + tr("Analyse des mods dupliqués impossible: {error}").format(error=error_message)
         self.statusBar().clearMessage()
-        QMessageBox.information(self, "Serveur importé", message)
+        QMessageBox.information(self, tr("Serveur importé"), message)
 
     def _server_import_failed(self, message: str) -> None:
-        self.statusBar().showMessage("Import échoué.", 5000)
-        QMessageBox.critical(self, "Import impossible", message)
+        self.statusBar().showMessage(tr("Import échoué."), 5000)
+        QMessageBox.critical(self, tr("Import impossible"), message)
 
     def duplicate_server(self) -> None:
         profile = self.current_profile
@@ -1329,7 +1437,7 @@ class MainWindow(QMainWindow):
             return
         duplicate = ServerProfile.from_dict(profile.to_dict())
         duplicate.id = uuid4().hex
-        duplicate.name = f"{profile.name} copie"
+        duplicate.name = tr("{name} copie").format(name=profile.name)
         duplicate.folder = str(profile.folder_path.parent / duplicate.name)
         duplicate.port = self._next_free_profile_port(profile.port + 1)
         duplicate.properties["server-port"] = str(duplicate.port)
@@ -1349,7 +1457,7 @@ class MainWindow(QMainWindow):
         profile = self.current_profile
         if not profile:
             return
-        text, ok = QInputDialog.getText(self, "Renommer", "Nouveau nom", text=profile.name)
+        text, ok = QInputDialog.getText(self, tr("Renommer"), tr("Nouveau nom"), text=profile.name)
         if ok and text:
             profile.name = text.strip()
             self.store.update(profile)
@@ -1360,9 +1468,9 @@ class MainWindow(QMainWindow):
         if not profile:
             return
         if self.runner(profile).running:
-            QMessageBox.warning(self, "Serveur actif", "Arrête le serveur avant de supprimer son profil.")
+            QMessageBox.warning(self, tr("Serveur actif"), tr("Arrête le serveur avant de supprimer son profil."))
             return
-        if QMessageBox.question(self, "Supprimer", f"Supprimer ce profil ? Le dossier serveur reste sur {machine_label()}.") == QMessageBox.Yes:
+        if QMessageBox.question(self, tr("Supprimer"), tr("Supprimer ce profil ? Le dossier serveur reste sur {machine}.").format(machine=machine_label())) == QMessageBox.Yes:
             self.store.remove(profile.id)
             self.current_profile = None
             self.refresh_server_list()
@@ -1384,21 +1492,21 @@ class MainWindow(QMainWindow):
             return
         result = self.network_results.get(profile.id)
         if result and result.connect_address:
-            self.connect_address_label.setText(f"Adresse joueurs: {result.connect_address}")
+            self.connect_address_label.setText(tr("Adresse joueurs: {address}").format(address=result.connect_address))
         else:
-            self.connect_address_label.setText(f"Adresse joueurs: recherche IP publique... port {profile.port}")
+            self.connect_address_label.setText(tr("Adresse joueurs: recherche IP publique... port {port}").format(port=profile.port))
         try:
             lan_ip = result.local_ip if result else local_lan_ip()
         except OSError:
             lan_ip = ""
-        self.local_address_label.setText(f"Adresse locale: {lan_ip}:{profile.port}" if lan_ip else "Adresse locale: -")
+        self.local_address_label.setText(tr("Adresse locale: {ip}:{port}").format(ip=lan_ip, port=profile.port) if lan_ip else tr("Adresse locale: -"))
         if result:
-            prefix = "ouvert" if result.ok else "à vérifier"
-            self.port_status_label.setText(f"Port routeur: {prefix} - {result.message}")
+            prefix = tr("ouvert") if result.ok else tr("à vérifier")
+            self.port_status_label.setText(tr("Port routeur: {prefix} - {message}").format(prefix=prefix, message=result.message))
         elif profile.id in self.port_workers:
-            self.port_status_label.setText("Port routeur: ouverture automatique en cours...")
+            self.port_status_label.setText(tr("Port routeur: ouverture automatique en cours..."))
         else:
-            self.port_status_label.setText("Port routeur: non vérifié")
+            self.port_status_label.setText(tr("Port routeur: non vérifié"))
 
     def ensure_selected_port_mapping(self) -> None:
         if self.current_profile:
@@ -1419,15 +1527,15 @@ class MainWindow(QMainWindow):
         self.network_results[profile_id] = result
         profile = self.store.get(profile_id)
         if profile:
-            self._append_log(profile_id, f"Réseau: {result.message}")
+            self._append_log(profile_id, tr("Réseau: {message}").format(message=result.message))
             if result.connect_address:
-                self._append_log(profile_id, f"Adresse à partager: {result.connect_address}")
+                self._append_log(profile_id, tr("Adresse à partager: {address}").format(address=result.connect_address))
         if self.current_profile and self.current_profile.id == profile_id:
             self.refresh_network_labels()
             if result.ok:
-                self.statusBar().showMessage(f"Port ouvert. Adresse joueurs: {result.connect_address or 'IP publique indisponible'}", 8000)
+                self.statusBar().showMessage(tr("Port ouvert. Adresse joueurs: {address}").format(address=result.connect_address or tr("IP publique indisponible")), 8000)
             else:
-                self.statusBar().showMessage("Ouverture automatique du port impossible. Voir Dashboard.", 8000)
+                self.statusBar().showMessage(tr("Ouverture automatique du port impossible. Voir Dashboard."), 8000)
 
     def copy_connect_address(self) -> None:
         profile = self.current_profile
@@ -1439,12 +1547,12 @@ class MainWindow(QMainWindow):
             self.ensure_port_mapping(profile)
             QMessageBox.information(
                 self,
-                "Adresse indisponible",
-                "L’adresse publique n’est pas encore prête. L’application lance la vérification réseau; réessaie dans quelques secondes.",
+                tr("Adresse indisponible"),
+                tr("L’adresse publique n’est pas encore prête. L’application lance la vérification réseau; réessaie dans quelques secondes."),
             )
             return
         QApplication.clipboard().setText(address)
-        self.statusBar().showMessage(f"Adresse copiée: {address}", 5000)
+        self.statusBar().showMessage(tr("Adresse copiée: {address}").format(address=address), 5000)
 
     def start_server(self) -> None:
         profile = self.current_profile
@@ -1458,13 +1566,13 @@ class MainWindow(QMainWindow):
                 configure_start_script_server(profile)
                 self.store.update(profile)
             except Exception as exc:
-                QMessageBox.warning(self, "Configuration du script serveur", str(exc))
+                QMessageBox.warning(self, tr("Configuration du script serveur"), str(exc))
                 return
         if profile.ram_min_gb > profile.ram_max_gb:
-            QMessageBox.warning(self, "RAM invalide", "La RAM minimale ne peut pas être supérieure à la RAM maximale.")
+            QMessageBox.warning(self, tr("RAM invalide"), tr("La RAM minimale ne peut pas être supérieure à la RAM maximale."))
             return
         if is_modded_type(profile.server_type) and not self.runner(profile).can_launch() and find_modloader_installer(profile.folder_path, profile.server_type):
-            self.statusBar().showMessage(f"Préparation {profile.server_type} du serveur importé...")
+            self.statusBar().showMessage(tr("Préparation {type} du serveur importé...").format(type=profile.server_type))
             self.prepare_worker = ServerPrepareWorker(profile)
             self.prepare_worker.finished_ok.connect(self._server_prepared_then_start)
             self.prepare_worker.failed.connect(self._server_prepare_failed)
@@ -1475,7 +1583,7 @@ class MainWindow(QMainWindow):
             # with a large modpack, so it runs in a background thread to
             # keep the UI responsive. _continue_start_server resumes once
             # it reports back.
-            self.statusBar().showMessage("Vérification des mods...")
+            self.statusBar().showMessage(tr("Vérification des mods..."))
             worker = DuplicateModsWorker(profile.id, profile.folder_path)
             self.duplicate_mods_workers[profile.id] = worker
             worker.finished_ok.connect(self._duplicate_mods_checked)
@@ -1490,9 +1598,9 @@ class MainWindow(QMainWindow):
         if moved_names:
             self._append_log(
                 profile_id,
-                "Mods dupliqués désactivés automatiquement:\n" + "\n".join(f"- {name}" for name in moved_names),
+                tr("Mods dupliqués désactivés automatiquement:") + "\n" + "\n".join(f"- {name}" for name in moved_names),
             )
-            self.statusBar().showMessage("Doublons de mods désactivés automatiquement.", 5000)
+            self.statusBar().showMessage(tr("Doublons de mods désactivés automatiquement."), 5000)
         profile = self.store.get(profile_id)
         if profile and self.current_profile and self.current_profile.id == profile_id:
             self._continue_start_server(profile)
@@ -1501,27 +1609,27 @@ class MainWindow(QMainWindow):
         self.duplicate_mods_workers.pop(profile_id, None)
         QMessageBox.warning(
             self,
-            "Mods dupliqués",
-            "Le serveur moddé peut crasher parce que plusieurs fichiers déclarent encore le même modId.\n\n"
-            + message
-            + "\n\nL’application a essayé de mettre les doublons de côté, mais il reste un conflit à corriger.",
+            tr("Mods dupliqués"),
+            tr("Le serveur moddé peut crasher parce que plusieurs fichiers déclarent encore le même modId.")
+            + "\n\n" + message
+            + "\n\n" + tr("L’application a essayé de mettre les doublons de côté, mais il reste un conflit à corriger."),
         )
 
     def _duplicate_mods_failed(self, profile_id: str, message: str) -> None:
         self.duplicate_mods_workers.pop(profile_id, None)
-        QMessageBox.warning(self, "Mods dupliqués", f"Impossible de désactiver les doublons automatiquement.\n\n{message}")
+        QMessageBox.warning(self, tr("Mods dupliqués"), tr("Impossible de désactiver les doublons automatiquement.\n\n{error}").format(error=message))
 
     def _continue_start_server(self, profile: ServerProfile) -> None:
         if not self.runner(profile).can_launch():
-            QMessageBox.warning(self, "Lancement impossible", "Le fichier de lancement du serveur est introuvable.")
+            QMessageBox.warning(self, tr("Lancement impossible"), tr("Le fichier de lancement du serveur est introuvable."))
             return
         for other_id, runner in self.runners.items():
             other = self.store.get(other_id)
             if other and other.id != profile.id and other.port == profile.port and runner.running:
-                QMessageBox.warning(self, "Port occupé", "Un autre serveur lancé utilise déjà ce port.")
+                QMessageBox.warning(self, tr("Port occupé"), tr("Un autre serveur lancé utilise déjà ce port."))
                 return
         if not port_is_free(profile.port) and not self.runner(profile).running:
-            QMessageBox.warning(self, "Port occupé", f"Le port {profile.port} est déjà utilisé sur {machine_label()}.")
+            QMessageBox.warning(self, tr("Port occupé"), tr("Le port {port} est déjà utilisé sur {machine}.").format(port=profile.port, machine=machine_label()))
             return
         if not self._ensure_eula(profile):
             return
@@ -1576,17 +1684,17 @@ class MainWindow(QMainWindow):
     def _server_prepared_then_start(self, profile: ServerProfile, notes: str = "") -> None:
         self.store.update(profile)
         self.refresh_current_profile()
-        self.statusBar().showMessage(f"Serveur {profile.server_type} préparé.", 5000)
+        self.statusBar().showMessage(tr("Serveur {type} préparé.").format(type=profile.server_type), 5000)
         if notes:
             self._append_log(profile.id, notes)
         if not self.runner(profile).can_launch():
-            QMessageBox.warning(self, "Lancement impossible", "Le modloader a été préparé, mais aucun fichier de lancement serveur n’a été trouvé.")
+            QMessageBox.warning(self, tr("Lancement impossible"), tr("Le modloader a été préparé, mais aucun fichier de lancement serveur n’a été trouvé."))
             return
         self.start_server()
 
     def _server_prepare_failed(self, message: str) -> None:
-        self.statusBar().showMessage("Préparation du modloader échouée.", 5000)
-        QMessageBox.critical(self, "Préparation du modloader impossible", message)
+        self.statusBar().showMessage(tr("Préparation du modloader échouée."), 5000)
+        QMessageBox.critical(self, tr("Préparation du modloader impossible"), message)
 
     def _handle_java_missing(self, profile_id: str, java_version: str) -> None:
         """Offer to download the missing Java runtime when a server fails to start.
@@ -1605,15 +1713,17 @@ class MainWindow(QMainWindow):
             return
         answer = QMessageBox.question(
             self,
-            f"Java {java_version} requis",
-            f"Le serveur « {profile.name} » a besoin de Java {java_version}, introuvable sur {machine_label()}.\n\n"
-            f"Veux-tu que l’application télécharge Temurin Java {java_version} et l’installe "
-            "automatiquement dans son propre dossier ? Le serveur démarrera ensuite "
-            "automatiquement avec ce Java.\n\n"
-            f"Dossier d’installation: {managed_java_root()}",
+            tr("Java {version} requis").format(version=java_version),
+            tr(
+                "Le serveur « {name} » a besoin de Java {version}, introuvable sur {machine}.\n\n"
+                "Veux-tu que l’application télécharge Temurin Java {version} et l’installe "
+                "automatiquement dans son propre dossier ? Le serveur démarrera ensuite "
+                "automatiquement avec ce Java.\n\n"
+                "Dossier d’installation: {java_root}"
+            ).format(name=profile.name, version=java_version, machine=machine_label(), java_root=managed_java_root()),
         )
         if answer != QMessageBox.Yes:
-            self._append_log(profile_id, f"Java {java_version} non installé: démarrage annulé.")
+            self._append_log(profile_id, tr("Java {version} non installé: démarrage annulé.").format(version=java_version))
             return
         self._download_java_then(java_version, lambda: self._retry_start_server(profile_id, java_version))
 
@@ -1621,12 +1731,12 @@ class MainWindow(QMainWindow):
         profile = self.store.get(profile_id)
         if not profile:
             return
-        self._append_log(profile_id, f"Java {java_version} installé. Nouvelle tentative de démarrage du serveur...")
+        self._append_log(profile_id, tr("Java {version} installé. Nouvelle tentative de démarrage du serveur...").format(version=java_version))
         if self.current_profile and self.current_profile.id == profile_id:
             self.start_server()
         else:
             self.statusBar().showMessage(
-                f"Java {java_version} installé. Sélectionne « {profile.name} » pour le démarrer.", 8000
+                tr("Java {version} installé. Sélectionne « {name} » pour le démarrer.").format(version=java_version, name=profile.name), 8000
             )
 
     def _ensure_eula(self, profile: ServerProfile) -> bool:
@@ -1634,13 +1744,13 @@ class MainWindow(QMainWindow):
             return True
         answer = QMessageBox.question(
             self,
-            "EULA Minecraft",
-            "Minecraft demande d’accepter son EULA avant de démarrer le serveur. Acceptes-tu explicitement le EULA Minecraft ?",
+            tr("EULA Minecraft"),
+            tr("Minecraft demande d’accepter son EULA avant de démarrer le serveur. Acceptes-tu explicitement le EULA Minecraft ?"),
         )
         if answer == QMessageBox.Yes:
             profile.eula_path.write_text("eula=true\n", encoding="utf-8")
             return True
-        QMessageBox.information(self, "EULA refusé", "Le serveur ne sera pas démarré.")
+        QMessageBox.information(self, tr("EULA refusé"), tr("Le serveur ne sera pas démarré."))
         return False
 
     def stop_server(self) -> None:
@@ -1660,7 +1770,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "start_btn"):
             return
         running = bool(self.current_profile and self.runner(self.current_profile).running)
-        self.start_btn.setText("Arrêter" if running else "Démarrer")
+        self.start_btn.setText(tr("Arrêter") if running else tr("Démarrer"))
         self.start_btn.setObjectName("StopButton" if running else "PrimaryButton")
         self.start_btn.style().unpolish(self.start_btn)
         self.start_btn.style().polish(self.start_btn)
@@ -1676,7 +1786,7 @@ class MainWindow(QMainWindow):
             self.start_server()
 
     def kill_server(self) -> None:
-        if self.current_profile and QMessageBox.question(self, "Forcer l’arrêt", "Forcer l’arrêt seulement si le serveur bloque. Continuer ?") == QMessageBox.Yes:
+        if self.current_profile and QMessageBox.question(self, tr("Forcer l’arrêt"), tr("Forcer l’arrêt seulement si le serveur bloque. Continuer ?")) == QMessageBox.Yes:
             self.runner(self.current_profile).kill()
 
     def send_command(self) -> None:
@@ -1693,7 +1803,7 @@ class MainWindow(QMainWindow):
         command = command[1:].strip() if command.startswith("/") else command
         runner = self.runner(self.current_profile)
         if not runner.running:
-            QMessageBox.warning(self, "Serveur arrêté", "Démarre le serveur avant d’envoyer une commande.")
+            QMessageBox.warning(self, tr("Serveur arrêté"), tr("Démarre le serveur avant d’envoyer une commande."))
             return
         runner.send_command(command)
         self._append_log(self.current_profile.id, f"> {display_command}")
@@ -1704,7 +1814,7 @@ class MainWindow(QMainWindow):
         # log line that is hundreds of KB long. Rendering that in the
         # console widget can freeze the UI for a long time, so truncate it.
         if len(line) > MAX_LOG_LINE_LENGTH:
-            line = line[:MAX_LOG_LINE_LENGTH] + f"… (ligne tronquée, {len(line)} caractères)"
+            line = line[:MAX_LOG_LINE_LENGTH] + tr("… (ligne tronquée, {count} caractères)").format(count=len(line))
         self.logs.setdefault(profile_id, []).append(line)
         tracker = self.trackers.get(profile_id)
         if not tracker:
@@ -1729,18 +1839,18 @@ class MainWindow(QMainWindow):
     def _notify_player_event(self, profile: ServerProfile, event: Tuple[str, str]) -> None:
         kind, pseudo = event
         if kind == "join":
-            self.notify(profile.name, f"{pseudo} a rejoint le serveur.")
+            self.notify(profile.name, tr("{pseudo} a rejoint le serveur.").format(pseudo=pseudo))
         else:
-            self.notify(profile.name, f"{pseudo} a quitté le serveur.")
+            self.notify(profile.name, tr("{pseudo} a quitté le serveur.").format(pseudo=pseudo))
 
     def _state_changed(self, profile_id: str, state: str) -> None:
         if self.current_profile and self.current_profile.id == profile_id:
-            self.status_label.setText(f"Statut: {state}")
+            self.status_label.setText(tr("Statut: {state}").format(state=display_run_state(state)))
             self._refresh_start_button()
         if state == "erreur":
             profile = self.store.get(profile_id)
             if profile:
-                self.notify(profile.name, "Le serveur n’a pas pu démarrer. Voir la console pour le détail.", QSystemTrayIcon.Critical)
+                self.notify(profile.name, tr("Le serveur n’a pas pu démarrer. Voir la console pour le détail."), QSystemTrayIcon.Critical)
         if state in {"arrete", "erreur"}:
             self._ram_warned.discard(profile_id)
             self._disk_warned.discard(profile_id)
@@ -1757,7 +1867,7 @@ class MainWindow(QMainWindow):
             if not console or not log_filter:
                 continue
             selected = log_filter.currentText()
-            filtered = lines if selected == "TOUT" else [line for line in lines if selected in line]
+            filtered = lines if selected == tr("TOUT") else [line for line in lines if selected in line]
             console.setPlainText("\n".join(filtered[-1000:]))
             console.moveCursor(QTextCursor.End)
 
@@ -1768,7 +1878,7 @@ class MainWindow(QMainWindow):
         profile = self.current_profile
         if not profile:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Sauvegarder les logs", str(profile.folder_path / "logs-export.txt"))
+        path, _ = QFileDialog.getSaveFileName(self, tr("Sauvegarder les logs"), str(profile.folder_path / "logs-export.txt"))
         if path:
             Path(path).write_text(self.console.toPlainText(), encoding="utf-8")
 
@@ -1796,7 +1906,7 @@ class MainWindow(QMainWindow):
             avatar_item.setIcon(self.avatar_icon(pseudo))
             table.setItem(row_index, 0, avatar_item)
             if connected_only:
-                values = [pseudo, row.get("ip", ""), row.get("remote_port", ""), row.get("connected_at", ""), row.get("status", "")]
+                values = [pseudo, row.get("ip", ""), row.get("remote_port", ""), row.get("connected_at", ""), display_player_status(row.get("status", ""))]
             else:
                 values = [
                     pseudo,
@@ -1804,7 +1914,7 @@ class MainWindow(QMainWindow):
                     row.get("remote_port", ""),
                     row.get("connected_at", ""),
                     row.get("disconnected_at", ""),
-                    row.get("status", ""),
+                    display_player_status(row.get("status", "")),
                 ]
             for column, value in enumerate(values):
                 table.setItem(row_index, column + 1, QTableWidgetItem(value))
@@ -1895,19 +2005,19 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         actions = {}
         if table is self.banned_players_table:
-            actions[menu.addAction("Débannir")] = f"pardon {pseudo}"
-            actions[menu.addAction("Ajouter à la whitelist")] = f"whitelist add {pseudo}"
+            actions[menu.addAction(tr("Débannir"))] = f"pardon {pseudo}"
+            actions[menu.addAction(tr("Ajouter à la whitelist"))] = f"whitelist add {pseudo}"
         else:
             actions = {
-                menu.addAction("Mettre opérateur"): f"op {pseudo}",
-                menu.addAction("Retirer opérateur"): f"deop {pseudo}",
+                menu.addAction(tr("Mettre opérateur")): f"op {pseudo}",
+                menu.addAction(tr("Retirer opérateur")): f"deop {pseudo}",
                 menu.addSeparator(): "",
-                menu.addAction("Expulser"): f"kick {pseudo}",
-                menu.addAction("Bannir"): f"ban {pseudo}",
-                menu.addAction("Débannir"): f"pardon {pseudo}",
+                menu.addAction(tr("Expulser")): f"kick {pseudo}",
+                menu.addAction(tr("Bannir")): f"ban {pseudo}",
+                menu.addAction(tr("Débannir")): f"pardon {pseudo}",
                 menu.addSeparator(): "",
-                menu.addAction("Ajouter à la whitelist"): f"whitelist add {pseudo}",
-                menu.addAction("Retirer de la whitelist"): f"whitelist remove {pseudo}",
+                menu.addAction(tr("Ajouter à la whitelist")): f"whitelist add {pseudo}",
+                menu.addAction(tr("Retirer de la whitelist")): f"whitelist remove {pseudo}",
             }
         selected = menu.exec(table.viewport().mapToGlobal(pos))
         command = actions.get(selected, "")
@@ -1920,11 +2030,11 @@ class MainWindow(QMainWindow):
             return
         runner = self.runner(profile)
         if not runner.running:
-            QMessageBox.warning(self, "Serveur arrêté", "Démarre le serveur avant d’envoyer une commande joueur.")
+            QMessageBox.warning(self, tr("Serveur arrêté"), tr("Démarre le serveur avant d’envoyer une commande joueur."))
             return
         runner.send_command(command)
         self._append_log(profile.id, f"> {command}")
-        self.statusBar().showMessage(f"Commande envoyée: {command}", 4000)
+        self.statusBar().showMessage(tr("Commande envoyée: {command}").format(command=command), 4000)
         self.refresh_players()
 
     def render_properties(self) -> None:
@@ -1955,6 +2065,12 @@ class MainWindow(QMainWindow):
             key = self.properties_table.item(row, 0).text()
             value_item = self.properties_table.item(row, 1)
             values[key] = value_item.text() if value_item else ""
+        for key in NUMERIC_PROPERTY_KEYS:
+            try:
+                int(values.get(key, ""))
+            except (TypeError, ValueError):
+                QMessageBox.warning(self, tr("Valeur invalide"), tr("« {key} » doit être un nombre entier.").format(key=key))
+                return
         values["server-ip"] = ""
         profile.properties = values
         profile.port = int(values.get("server-port", profile.port))
@@ -1970,7 +2086,7 @@ class MainWindow(QMainWindow):
         ram_min = self.ram_min_setting.value()
         ram_max = self.ram_max_setting.value()
         if ram_min > ram_max:
-            QMessageBox.warning(self, "RAM invalide", "La RAM minimale ne peut pas être supérieure à la RAM maximale.")
+            QMessageBox.warning(self, tr("RAM invalide"), tr("La RAM minimale ne peut pas être supérieure à la RAM maximale."))
             return
         profile.ram_min_gb = ram_min
         profile.ram_max_gb = ram_max
@@ -1978,13 +2094,13 @@ class MainWindow(QMainWindow):
             try:
                 configure_start_script_server(profile)
             except Exception as exc:
-                QMessageBox.warning(self, "RAM enregistrée, script non mis à jour", str(exc))
+                QMessageBox.warning(self, tr("RAM enregistrée, script non mis à jour"), str(exc))
         self.store.update(profile)
         self.refresh_dashboard()
         if self.runner(profile).running:
-            QMessageBox.information(self, "RAM enregistrée", "La nouvelle RAM sera utilisée au prochain redémarrage du serveur.")
+            QMessageBox.information(self, tr("RAM enregistrée"), tr("La nouvelle RAM sera utilisée au prochain redémarrage du serveur."))
         else:
-            self.statusBar().showMessage("RAM du serveur enregistrée.", 5000)
+            self.statusBar().showMessage(tr("RAM du serveur enregistrée."), 5000)
 
     def _update_security_warning(self) -> None:
         profile = self.current_profile
@@ -1992,19 +2108,22 @@ class MainWindow(QMainWindow):
             return
         warnings = []
         if profile.properties.get("online-mode", "true").lower() == "false":
-            warnings.append("online-mode=false désactive la vérification Mojang.")
+            warnings.append(tr("online-mode=false désactive la vérification Mojang."))
         if profile.properties.get("white-list", "false").lower() == "false":
-            warnings.append("white-list=false autorise les connexions non listées.")
-        self.security_warning.setText("Avertissement sécurité: " + " ".join(warnings) if warnings else "")
+            warnings.append(tr("white-list=false autorise les connexions non listées."))
+        self.security_warning.setText(tr("Avertissement sécurité: ") + " ".join(warnings) if warnings else "")
 
     def change_version(self) -> None:
         profile = self.current_profile
         if not profile:
             return
+        if self.runner(profile).running:
+            QMessageBox.warning(self, tr("Serveur actif"), tr("Arrête le serveur avant de changer de version."))
+            return
         new_version = self.new_version.currentText().strip()
         if not new_version or new_version == profile.version:
             return
-        if QMessageBox.question(self, "Changer de version", "Un backup va être créé. Revenir vers une ancienne version peut corrompre le monde. Continuer ?") != QMessageBox.Yes:
+        if QMessageBox.question(self, tr("Changer de version"), tr("Un backup va être créé. Revenir vers une ancienne version peut corrompre le monde. Continuer ?")) != QMessageBox.Yes:
             return
         create_backup(profile, "before-version-change")
         old_dir = profile.folder_path / "old_versions"
@@ -2014,7 +2133,7 @@ class MainWindow(QMainWindow):
         try:
             VanillaDownloader().download_server(new_version, profile.jar_path)
         except Exception as exc:
-            QMessageBox.critical(self, "Téléchargement impossible", str(exc))
+            QMessageBox.critical(self, tr("Téléchargement impossible"), str(exc))
             return
         profile.version = new_version
         self.store.update(profile)
@@ -2025,7 +2144,7 @@ class MainWindow(QMainWindow):
             return
         archive = create_backup(self.current_profile)
         self.refresh_backups()
-        QMessageBox.information(self, "Backup créé", str(archive))
+        QMessageBox.information(self, tr("Backup créé"), str(archive))
 
     def refresh_backups(self) -> None:
         self.backups_list.clear()
@@ -2039,9 +2158,16 @@ class MainWindow(QMainWindow):
         item = self.backups_list.currentItem()
         if not profile or not item:
             return
-        if QMessageBox.question(self, "Restaurer", "Restaurer ce backup avec confirmation ?") == QMessageBox.Yes:
-            restore_backup(profile, Path(item.text()))
-            QMessageBox.information(self, "Backup restauré", "Restauration terminée.")
+        if self.runner(profile).running:
+            QMessageBox.warning(self, tr("Serveur actif"), tr("Arrête le serveur avant de restaurer un backup."))
+            return
+        if QMessageBox.question(self, tr("Restaurer"), tr("Restaurer ce backup avec confirmation ?")) == QMessageBox.Yes:
+            try:
+                restore_backup(profile, Path(item.text()))
+            except (OSError, zipfile.BadZipFile) as exc:
+                QMessageBox.critical(self, tr("Restauration échouée"), str(exc))
+                return
+            QMessageBox.information(self, tr("Backup restauré"), tr("Restauration terminée."))
 
     def open_backups_folder(self) -> None:
         if self.current_profile:
@@ -2050,7 +2176,7 @@ class MainWindow(QMainWindow):
     def refresh_open_ports(self) -> None:
         if getattr(self, "ports_worker", None) and self.ports_worker.isRunning():
             return
-        self.ports_status_label.setText("Recherche du routeur UPnP...")
+        self.ports_status_label.setText(tr("Recherche du routeur UPnP..."))
         self.ports_table.setRowCount(0)
         candidate_ports = sorted({profile.port for profile in self.store.profiles})
         self.ports_worker = PortListWorker(candidate_ports)
@@ -2063,9 +2189,9 @@ class MainWindow(QMainWindow):
         if error:
             self.ports_status_label.setText(error)
         elif not mappings:
-            self.ports_status_label.setText("Aucun port ouvert sur ce routeur.")
+            self.ports_status_label.setText(tr("Aucun port ouvert sur ce routeur."))
         else:
-            self.ports_status_label.setText(f"{len(mappings)} port(s) ouvert(s) sur ce routeur.")
+            self.ports_status_label.setText(tr("{count} port(s) ouvert(s) sur ce routeur.").format(count=len(mappings)))
 
     def _fill_ports_table(self, mappings: List[PortMapping]) -> None:
         self.ports_table.setRowCount(len(mappings))
@@ -2076,7 +2202,7 @@ class MainWindow(QMainWindow):
                 row, 2, QTableWidgetItem(f"{mapping.internal_client}:{mapping.internal_port}")
             )
             self.ports_table.setItem(row, 3, QTableWidgetItem(mapping.description))
-            delete_button = QPushButton("Supprimer")
+            delete_button = QPushButton(tr("Supprimer"))
             delete_button.clicked.connect(lambda _checked=False, r=row: self.delete_open_port(r))
             self.ports_table.setCellWidget(row, 4, delete_button)
 
@@ -2086,7 +2212,7 @@ class MainWindow(QMainWindow):
         mapping = self._ports_cache[row]
         if getattr(self, "ports_delete_worker", None) and self.ports_delete_worker.isRunning():
             return
-        self.ports_status_label.setText(f"Suppression du port {mapping.external_port}...")
+        self.ports_status_label.setText(tr("Suppression du port {port}...").format(port=mapping.external_port))
         self.ports_delete_worker = PortDeleteWorker([mapping])
         self.ports_delete_worker.finished_ok.connect(self._on_ports_deleted)
         self.ports_delete_worker.start()
@@ -2099,13 +2225,13 @@ class MainWindow(QMainWindow):
         if (
             QMessageBox.question(
                 self,
-                "Supprimer tous les ports",
-                f"Supprimer les {len(self._ports_cache)} redirection(s) de port ouvertes sur ce routeur ?",
+                tr("Supprimer tous les ports"),
+                tr("Supprimer les {count} redirection(s) de port ouvertes sur ce routeur ?").format(count=len(self._ports_cache)),
             )
             != QMessageBox.Yes
         ):
             return
-        self.ports_status_label.setText("Suppression des ports ouverts...")
+        self.ports_status_label.setText(tr("Suppression des ports ouverts..."))
         self.ports_delete_worker = PortDeleteWorker(list(self._ports_cache))
         self.ports_delete_worker.finished_ok.connect(self._on_ports_deleted)
         self.ports_delete_worker.start()
@@ -2113,8 +2239,8 @@ class MainWindow(QMainWindow):
     def _on_ports_deleted(self, results: list) -> None:
         failures = [(mapping, error) for mapping, ok, error in results if not ok]
         if failures:
-            details = "\n".join(f"Port {mapping.external_port}: {error}" for mapping, error in failures)
-            QMessageBox.warning(self, "Suppression incomplète", f"Certains ports n'ont pas pu être supprimés:\n{details}")
+            details = "\n".join(tr("Port {port}: {error}").format(port=mapping.external_port, error=error) for mapping, error in failures)
+            QMessageBox.warning(self, tr("Suppression incomplète"), tr("Certains ports n'ont pas pu être supprimés:\n{details}").format(details=details))
         self.refresh_open_ports()
 
     def _request_folder_size(self, profile: ServerProfile) -> None:
@@ -2138,7 +2264,7 @@ class MainWindow(QMainWindow):
     def _folder_size_ready(self, profile_id: str, size_mb: float) -> None:
         self._folder_size_cache[profile_id] = size_mb
         if self.current_profile and self.current_profile.id == profile_id:
-            self.folder_label.setText(f"Taille dossier: {size_mb:.1f} Mo")
+            self.folder_label.setText(tr("Taille dossier: {size:.1f} Mo").format(size=size_mb))
             self.disk_chart.push(size_mb)
 
     def refresh_dashboard(self) -> None:
@@ -2149,30 +2275,45 @@ class MainWindow(QMainWindow):
         folder_mb = self._folder_size_cache.get(profile.id, 0.0)
         snapshot = self.monitor.snapshot(runner.pid, profile.folder_path, folder_mb)
         self._request_folder_size(profile)
-        self.status_label.setText(f"Statut: {'demarre' if runner.running else 'arrete'}")
+        self.status_label.setText(tr("Statut: {state}").format(state=display_run_state("demarre" if runner.running else "arrete")))
         self._refresh_start_button()
         max_ram = max(profile.ram_max_gb * 1024, 1)
         self.ram_bar.setMaximum(max_ram)
         self.ram_bar.setValue(min(int(snapshot["ram_mb"]), max_ram))
-        self.ram_bar.setFormat(f"{snapshot['ram_mb']:.0f} Mo / {profile.ram_max_gb} Go")
+        self.ram_bar.setFormat(tr("{ram:.0f} Mo / {max_ram} Go").format(ram=snapshot['ram_mb'], max_ram=profile.ram_max_gb))
         self.ram_chart.push(snapshot["ram_mb"], max_ram)
         cpu_value = max(0.0, snapshot["cpu"])
         self.cpu_bar.setValue(max(0, min(int(snapshot["cpu"]), 100)))
         self.cpu_bar.setFormat(f"{cpu_value:.1f}%")
         self.cpu_chart.push(cpu_value, 100)
         connected = len([p for p in self.trackers.get(profile.id, PlayerTracker()).rows() if p.get("status") == "connecte"])
-        self.players_bar.setMaximum(max(int(profile.properties.get("max-players", "20")), 1))
+        try:
+            max_players = int(profile.properties.get("max-players", "20"))
+        except (TypeError, ValueError):
+            # A non-numeric max-players (typed by hand in the properties
+            # editor before it validated input) must not crash this method:
+            # it's called by a QTimer every 1.5s while this profile is shown.
+            max_players = 20
+        self.players_bar.setMaximum(max(max_players, 1))
         self.players_bar.setValue(connected)
-        self.players_bar.setFormat(f"{connected} connecté(s)")
-        self.ram_alloc_label.setText(f"Allocation RAM: {profile.ram_min_gb} Go min / {profile.ram_max_gb} Go max")
-        self.folder_label.setText(f"Taille dossier: {snapshot['folder_mb']:.1f} Mo")
-        self.disk_label.setText(f"Disque libre: {snapshot['disk_free_gb']:.1f} Go")
+        self.players_bar.setFormat(tr("{count} connecté(s)").format(count=connected))
+        self.ram_alloc_label.setText(tr("Allocation RAM: {min} Go min / {max} Go max").format(min=profile.ram_min_gb, max=profile.ram_max_gb))
+        self.folder_label.setText(tr("Taille dossier: {size:.1f} Mo").format(size=snapshot['folder_mb']))
+        self.disk_label.setText(tr("Disque libre: {free:.1f} Go").format(free=snapshot['disk_free_gb']))
         self.storage_label.setText(
-            f"Dossier: {profile.folder_path}\n"
-            f"server.jar: {profile.jar_path}\n"
-            f"Processus surveillés: {int(snapshot['process_count'])}\n"
-            f"Taille du dossier serveur: {snapshot['folder_mb']:.1f} Mo\n"
-            f"Espace disque libre: {snapshot['disk_free_gb']:.1f} Go"
+            tr(
+                "Dossier: {folder}\n"
+                "server.jar: {jar}\n"
+                "Processus surveillés: {process_count}\n"
+                "Taille du dossier serveur: {folder_mb:.1f} Mo\n"
+                "Espace disque libre: {disk_free_gb:.1f} Go"
+            ).format(
+                folder=profile.folder_path,
+                jar=profile.jar_path,
+                process_count=int(snapshot['process_count']),
+                folder_mb=snapshot['folder_mb'],
+                disk_free_gb=snapshot['disk_free_gb'],
+            )
         )
         self._check_resource_alerts(profile, runner, snapshot, max_ram)
 
@@ -2188,8 +2329,10 @@ class MainWindow(QMainWindow):
                 self._ram_warned.add(profile.id)
                 self.notify(
                     profile.name,
-                    f"RAM presque pleine: {snapshot['ram_mb']:.0f} Mo utilisés sur {profile.ram_max_gb} Go alloués. "
-                    "Le serveur risque de devenir instable ou de crasher.",
+                    tr(
+                        "RAM presque pleine: {used:.0f} Mo utilisés sur {max} Go alloués. "
+                        "Le serveur risque de devenir instable ou de crasher."
+                    ).format(used=snapshot['ram_mb'], max=profile.ram_max_gb),
                     QSystemTrayIcon.Warning,
                 )
         elif snapshot["ram_mb"] < max_ram * 0.75:
@@ -2200,8 +2343,10 @@ class MainWindow(QMainWindow):
                 self._disk_warned.add(profile.id)
                 self.notify(
                     profile.name,
-                    f"Espace disque faible: {snapshot['disk_free_gb']:.1f} Go restants sur {machine_label()}. "
-                    "Le serveur peut s’arrêter ou corrompre des fichiers s’il n’y a plus de place.",
+                    tr(
+                        "Espace disque faible: {free:.1f} Go restants sur {machine}. "
+                        "Le serveur peut s’arrêter ou corrompre des fichiers s’il n’y a plus de place."
+                    ).format(free=snapshot['disk_free_gb'], machine=machine_label()),
                     QSystemTrayIcon.Warning,
                 )
         elif snapshot["disk_free_gb"] > 2.0:

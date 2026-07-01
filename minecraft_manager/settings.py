@@ -11,6 +11,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "download_player_heads": True,
     "theme_mode": "auto",
     "notifications_enabled": True,
+    "language": "en",
 }
 
 

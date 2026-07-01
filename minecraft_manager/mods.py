@@ -8,6 +8,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 
+from .i18n import tr
+
 
 def find_duplicate_mods(server_folder: Path) -> Dict[str, List[Path]]:
     mods_dir = server_folder / "mods"
@@ -95,7 +97,7 @@ def disable_duplicate_mods(server_folder: Path) -> List[Path]:
         moved.append(target)
 
     if moved and not any(mods_dir.glob("*.jar")):
-        raise RuntimeError("Tous les mods auraient été désactivés, opération annulée.")
+        raise RuntimeError(tr("Tous les mods auraient été désactivés, opération annulée."))
     return moved
 
 
