@@ -5,10 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-07-01
 
 ### Added
-- MIT License.
+- Multi-language interface: English, French and Spanish, selectable from Settings → Language. English is now the default language for new installs. Applying a new language requires restarting the app.
+
+### Fixed
+- A corrupted or truncated `profiles.json` no longer prevents the app from starting; the bad file is quarantined instead of being silently overwritten. Profile saving is now atomic (write to a temp file, then replace) so a crash mid-save can't corrupt it in the first place.
+- Loading a `profiles.json` with a field unknown to this version of the app (e.g. from a newer release) no longer crashes.
+- Server names with characters invalid in file names (`: / * ? " < > |`) no longer fail to create a backup.
+- A `server.properties` value containing a newline is no longer written as a raw line break that corrupts the file; property keys/values with stray surrounding whitespace are now parsed correctly instead of creating silent duplicate keys.
+- Importing an existing server folder whose `server.properties` has an invalid `server-port` no longer crashes; it falls back to 25565.
+- Typing a non-numeric value into `server-port`, `max-players`, `view-distance` or `simulation-distance` in the properties editor is now rejected with a warning instead of corrupting the profile or crashing the dashboard on every refresh.
+- Restoring a backup or changing the Minecraft version while the server is still running is now blocked with a warning, matching the existing protection on server deletion; a failed restore (e.g. a locked file) now shows an error instead of crashing.
+- Closing the app while a server is still running now offers to stop it cleanly (or cancel) instead of terminating the Java process uncontrolled.
+- A server name of `.` or `..` no longer resolves to the current/parent directory when picking its folder.
+- Windows: Java version-detection calls and the Forge/NeoForge installer no longer briefly flash a console window.
+- Windows: server console output (player names, MOTD, log lines) is no longer at risk of encoding corruption on non-English locales with Java versions older than 18; the JVM is now forced to UTF-8 I/O.
 
 ## [1.0.3] - 2026-06-13
 
